@@ -5,7 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="ace8d6e5-905f-4bbd-8a7a-358a874d834a" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/Character level Bigram LM/main.ipynb" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Character level Bigram LM/MLP/mlp.ipynb" beforeDir="false" afterPath="$PROJECT_DIR$/Character level Bigram LM/MLP/mlp.ipynb" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
