@@ -55,8 +55,7 @@ class MultiHeadAttention(nn.Module):
         v = transform(v, self.w_v)
 
         out = scaled_dot_product(q, k, v, mask)
-        out = out.transpose(1, 2).contiguous().view(
-            batch_size, sequence_length, dim)
+        out = out.transpose(1, 2).contiguous().view(batch_size, sequence_length, dim)
         return out @ self.w_o
 
 
