@@ -1,0 +1,21 @@
+[project]
+name = "nlp-algorithms"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Pilot-Khadka", email = "khdpilot@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "matplotlib>=3.10.3",
+    "torch>=2.7.1",
+    "tqdm>=4.67.1",
+]
+
+[project.scripts]
+nlp-algorithms = "nlp_algorithms:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"

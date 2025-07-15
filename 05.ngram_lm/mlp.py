@@ -35,10 +35,12 @@ class CharacterLevelMLP:
         self._init_parameters()
 
     def _init_parameters(self):
-        self.C = torch.randn((self.vocab_size, self.n_embed), generator=self.generator)
+        self.C = torch.randn((self.vocab_size, self.n_embed),
+                             generator=self.generator)
 
         input_size = self.block_size * self.n_embed
-        self.W1 = torch.randn((input_size, self.n_hidden), generator=self.generator)
+        self.W1 = torch.randn((input_size, self.n_hidden),
+                              generator=self.generator)
         self.b1 = torch.randn(self.n_hidden, generator=self.generator)
 
         self.W2 = torch.randn(
@@ -135,7 +137,8 @@ class LanguageModelTrainer:
             loss = self.model.calculate_loss(X_train[ix], Y_train[ix])
 
             if i % 10000 == 0:
-                print(f"Iteration {i:6d}/{iterations}: Loss = {loss.item():.4f}")
+                print(f"Iteration {
+                      i:6d}/{iterations}: Loss = {loss.item():.4f}")
 
             for p in self.model.parameters:
                 p.grad = None
@@ -219,7 +222,8 @@ class TextGenerator:
                 with torch.no_grad():
                     logits = self.model.forward(torch.tensor([context]))
                     probs = F.softmax(logits, dim=1)
-                    ix = torch.multinomial(probs, num_samples=1, generator=g).item()
+                    ix = torch.multinomial(
+                        probs, num_samples=1, generator=g).item()
 
                 context = context[1:] + [ix]
                 out.append(ix)
@@ -281,7 +285,8 @@ def main():
 
     trainer = LanguageModelTrainer(model)
     print("\nFinding optimal learning rate...")
-    lri, lossi, stepi = trainer.find_learning_rate(X_train, Y_train, iterations=1000)
+    lri, lossi, stepi = trainer.find_learning_rate(
+        X_train, Y_train, iterations=1000)
 
     plt.figure(figsize=(10, 6))
     plt.plot(lri, lossi)
