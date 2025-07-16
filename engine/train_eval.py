@@ -1,5 +1,6 @@
 import torch
 from tqdm import tqdm
+from evaluation_metrics.metrics import compute_metrics
 
 
 def train_epoch(
@@ -40,9 +41,10 @@ def train_epoch(
     avg_loss = total_loss / num_batches
     metrics = {}
     if metrics_fn is not None:
-        metrics = metrics_fn(avg_loss=avg_loss)
-        for k, v in metrics.items():
-            logger.info(f"Training - {k}: {v:.4f}")
+        metrics = compute_metrics(metrics_fn, avg_loss=avg_loss)
+
+    for k, v in metrics.items():
+        logger.info(f"Training - {k}: {v:.4f}")
     logger.info(f"Training - Average Loss: {avg_loss:.4f}")
     return avg_loss, metrics
 
@@ -75,8 +77,9 @@ def validate_epoch(
     avg_loss = total_loss / num_batches
     metrics = {}
     if metrics_fn is not None:
-        metrics = metrics_fn(avg_loss=avg_loss)
-        for k, v in metrics.items():
-            logger.info(f"Validation - {k}: {v:.4f}")
+        metrics = compute_metrics(metrics_fn, avg_loss=avg_loss)
+
+    for k, v in metrics.items():
+        logger.info(f"Validation - {k}: {v:.4f}")
     logger.info(f"Validation - Average Loss: {avg_loss:.4f}")
     return avg_loss, metrics

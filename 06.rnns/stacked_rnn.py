@@ -17,7 +17,8 @@ class StackedRNN(nn.Module):
         self.output_dim = output_dim
         self.num_stacks = num_stacks
 
-        self.i2h = nn.Linear(self.embedding_dim + self.hidden_dim, self.hidden_dim)
+        self.i2h = nn.Linear(self.embedding_dim +
+                             self.hidden_dim, self.hidden_dim)
         self.stacks = nn.ModuleList()
 
         # considering the hidden dim of stacks is also the same
@@ -32,7 +33,8 @@ class StackedRNN(nn.Module):
 
         if hidden is None:
             hidden = [
-                torch.zeros(batch_size, self.hidden_dim, device=input_seq.device)
+                torch.zeros(batch_size, self.hidden_dim,
+                            device=input_seq.device)
                 for _ in range(self.num_stacks)
             ]
 
@@ -59,7 +61,8 @@ if __name__ == "__main__":
     batch_size = 32
     seq_len = 10
     embedding_dim = 768
-    rnn = StackedRNN(embedding_dim=embedding_dim, hidden_dim=1000, output_dim=10)
+    rnn = StackedRNN(embedding_dim=embedding_dim,
+                     hidden_dim=1000, output_dim=10)
 
     dummy_input = torch.randn(batch_size, seq_len, embedding_dim)
     output = rnn(dummy_input)

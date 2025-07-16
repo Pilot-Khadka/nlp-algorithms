@@ -3,7 +3,7 @@ import torch.nn as nn
 import os
 from rnn import RNN
 from datasets.data_loader import load_dataset
-from engine.utils import setup_logging, save_model
+from engine.utils import setup_logging, save_model, load_model
 from engine.train_eval import train_epoch, validate_epoch
 
 
@@ -20,6 +20,7 @@ def main():
     )
 
     vocab_size = len(vocab)
+    print("vocab size:", vocab_size)
     embedding_dim = 100
     hidden_dim = 256
     output_dim = vocab_size  # for language modeling
@@ -35,10 +36,10 @@ def main():
     )
     criterion = nn.CrossEntropyLoss()
 
-    num_epochs = 3
+    num_epochs = 30
     best_valid_loss = float("inf")
     start_epoch = 0
-
+    metrics_to_log = ["perplexity"]
     checkpoint_path = "checkpoints/best_model.pt"
     if os.path.exists(checkpoint_path):
         logger.info("Loading existing checkpoint...")
@@ -47,9 +48,10 @@ def main():
                 checkpoint_path, device
             )
             logger.info(
-                f"Resumed from epoch {start_epoch}, best validation loss: {
-                    best_valid_loss:.4f}"
+                f"""Resumed epoch {start_epoch}, best valid loss: {
+                    best_valid_loss:.4f}"""
             )
+
         except Exception as e:
             logger.warning(f"Failed to load checkpoint: {e}")
             logger.info("Starting training from scratch...")
@@ -59,11 +61,24 @@ def main():
         logger.info(f"\n--- Epoch {epoch + 1}/{num_epochs} ---")
 
         train_loss = train_epoch(
-            model, embedding, train_loader, optimizer, criterion, device, logger
+            model,
+            embedding,
+            train_loader,
+            optimizer,
+            criterion,
+            device,
+            logger,
+            metrics_fn=metrics_to_log,
         )
 
-        valid_loss = validate_epoch(
-            model, embedding, valid_loader, criterion, device, logger
+        valid_loss, metrics = validate_epoch(
+            model,
+            embedding,
+            valid_loader,
+            criterion,
+            device,
+            logger,
+            metrics_fn=metrics_to_log,
         )
 
         if valid_loss < best_valid_loss:
@@ -79,8 +94,7 @@ def main():
                 hidden_dim,
                 checkpoint_path,
             )
-            logger.info(f"New best model saved! Validation loss: {
-                        valid_loss:.4f}")
+            logger.info(f"""New best model saved! Validation loss: {valid_loss:.4f}""")
 
         regular_checkpoint = f"checkpoints/epoch_{epoch + 1}.pt"
         save_model(
@@ -95,10 +109,10 @@ def main():
             regular_checkpoint,
         )
 
-        logger.info(
-            f"Epoch {epoch + 1} completed - Train Loss: {train_loss:.4f}, Valid Loss: {
-                valid_loss:.4f}"
-        )
+    logger.info(
+        f"Epoch {epoch + 1} - Train Loss: {train_loss:.4f}, "
+        f"Valid Loss: {valid_loss:.4f}"
+    )
 
     logger.info("Training completed!")
     logger.info(f"Best validation loss: {best_valid_loss:.4f}")
