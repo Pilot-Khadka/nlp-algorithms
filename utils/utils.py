@@ -1,4 +1,6 @@
 import os
+import sys
+import importlib.util
 import torch
 import logging
 import torch.nn as nn
@@ -57,3 +59,30 @@ def load_model(filepath, model_class, embedding_class=nn.Embedding, device="cpu"
         "loss": checkpoint["loss"],
         "model_kwargs": checkpoint["model_kwargs"],
     }
+
+
+def import_function_from_folder(
+    folder_path: str, module_filename: str, function_name: str
+):
+    """
+    Because the folders are named starting from number and a .
+    normal import would not work
+    """
+    module_path = os.path.abspath(os.path.join(folder_path, module_filename))
+    module_name = f"dynamic_module_{os.path.basename(folder_path)}"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None:
+        raise ImportError(f"Cannot find module spec for {module_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    func = getattr(module, function_name, None)
+    if func is None:
+        raise AttributeError(
+            f"""
+            Function '{function_name}' not found in module '{module_filename}'
+            """
+        )
+
+    return func

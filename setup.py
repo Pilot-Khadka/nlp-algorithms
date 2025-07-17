@@ -4,5 +4,5 @@ from setuptools import setup
 setup(
     name="nlp-algorithms",
     version="0.1",
-    packages=["datasets", "engine", "evaluation_metrics"],
+    packages=["datasets", "engine", "evaluation_metrics", "utils"],
 )
