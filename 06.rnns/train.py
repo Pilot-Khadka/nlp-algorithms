@@ -16,7 +16,7 @@ def main():
 
     logger.info("Loading dataset...")
     train_loader, valid_loader, test_loader, vocab = load_dataset(
-        name="ptb", seq_len=30, batch_size=32
+        name="ptb", seq_len=30, batch_size=128
     )
 
     vocab_size = len(vocab)
@@ -60,7 +60,7 @@ def main():
     for epoch in range(start_epoch, num_epochs):
         logger.info(f"\n--- Epoch {epoch + 1}/{num_epochs} ---")
 
-        train_loss = train_epoch(
+        train_loss, metrics = train_epoch(
             model,
             embedding,
             train_loader,
@@ -89,12 +89,14 @@ def main():
                 optimizer,
                 epoch + 1,
                 valid_loss,
-                vocab_size,
-                embedding_dim,
-                hidden_dim,
                 checkpoint_path,
+                vocab_size=vocab_size,
+                embedding_dim=embedding_dim,
+                hidden_dim=hidden_dim,
             )
-            logger.info(f"""New best model saved! Validation loss: {valid_loss:.4f}""")
+
+            logger.info(f"""New best model saved! Validation loss: {
+                        valid_loss:.4f}""")
 
         regular_checkpoint = f"checkpoints/epoch_{epoch + 1}.pt"
         save_model(
@@ -103,16 +105,16 @@ def main():
             optimizer,
             epoch + 1,
             valid_loss,
-            vocab_size,
-            embedding_dim,
-            hidden_dim,
             regular_checkpoint,
+            vocab_size=vocab_size,
+            embedding_dim=embedding_dim,
+            hidden_dim=hidden_dim,
         )
 
-    logger.info(
-        f"Epoch {epoch + 1} - Train Loss: {train_loss:.4f}, "
-        f"Valid Loss: {valid_loss:.4f}"
-    )
+        logger.info(
+            f"""Epoch {epoch + 1} - Train Loss: {train_loss:.4f}, Valid Loss: {
+                valid_loss:.4f}"""
+        )
 
     logger.info("Training completed!")
     logger.info(f"Best validation loss: {best_valid_loss:.4f}")

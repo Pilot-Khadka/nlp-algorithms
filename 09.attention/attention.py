@@ -40,7 +40,7 @@ class MultiHeadAttention(nn.Module):
     def forward(self, q, k, v, mask=None):
         batch_size, seq_length, dim = q.size()
 
-        def transform(x, w):
+        def transform(x, w, batch_size, seq_length):
             # x -> b, l, d
             # w -> d, d
             # out - > b, d, d
@@ -50,12 +50,13 @@ class MultiHeadAttention(nn.Module):
             # out -> [batch_size, num_heads, seq_length, d_k]
             return x.transpose(1, 2)
 
-        q = transform(q, self.w_q)
-        k = transform(k, self.w_k)
-        v = transform(v, self.w_v)
+        q = transform(q, self.w_q, batch_size, seq_length)
+        k = transform(k, self.w_k, batch_size, seq_length)
+        v = transform(v, self.w_v, batch_size, seq_length)
 
         out = scaled_dot_product(q, k, v, mask)
-        out = out.transpose(1, 2).contiguous().view(batch_size, sequence_length, dim)
+        out = out.transpose(1, 2).contiguous().view(
+            batch_size, seq_length, dim)
         return out @ self.w_o
 
 

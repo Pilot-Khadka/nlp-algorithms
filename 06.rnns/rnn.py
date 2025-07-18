@@ -1,8 +1,11 @@
 import torch
 import torch.nn as nn
+from engine.model_factory import BaseModel, create_model
+from engine.registry import register_model
 
 
-class RNN(nn.Module):
+@register_model("rnn")
+class RNN(BaseModel):
     def __init__(
         self,
         embedding_dim,
@@ -22,14 +25,15 @@ class RNN(nn.Module):
     def init_hidden(self, batch_size, device):
         return torch.zeros(batch_size, self.hidden_dim, device=device)
 
-    def forward(self, x):
+    def forward(self, x, hidden=None):
         # x shape: (batch_size, seq_len, embedding_dim)
         # 32, 10, 768
         batch_size, seq_len, _ = x.size()
 
         # hidden state
         # 32, 768
-        h_t = self.init_hidden(batch_size, x.device)
+        if hidden is None:
+            hidden = self.init_hidden(batch_size, x.device)
 
         for t in range(seq_len):
             # 32, 768
@@ -37,7 +41,7 @@ class RNN(nn.Module):
 
             # (batch_size, embedding + hidden)
             # 32, 768 + 768
-            combined = torch.cat([x_t, h_t], dim=1)
+            combined = torch.cat([x_t, hidden], dim=1)
             h_t = self.activation_fn(self.i2h(combined))  # feedback loop
 
         output = self.h2o(h_t)  # (batch_size, output_dim)
@@ -48,10 +52,20 @@ def main():
     batch_size = 32
     seq_len = 10
     embedding_dim = 768
-    rnn = RNN(embedding_dim=embedding_dim, hidden_dim=1000, output_dim=10)
+    vocab = 100
 
-    dummy_input = torch.randn(batch_size, seq_len, embedding_dim)
-    output = rnn(dummy_input)
+    model = create_model(
+        model_type="rnn",
+        vocab_size=vocab,
+        embedding_dim=embedding_dim,
+        hidden_dim=256,
+        output_dim=vocab,
+    )
+
+    # token indices
+    dummy_input = torch.randint(0, vocab, (batch_size, seq_len))
+
+    output = model(dummy_input)
     print(output.shape)  # torch.Size([32, 10])
 
 
