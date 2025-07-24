@@ -1,6 +1,44 @@
+import sys
 import torch
 from tqdm import tqdm
-from evaluation_metrics.metrics import compute_metrics
+from utils.metrics import compute_metrics
+
+
+def train(
+    model,
+    task,
+    train_loader,
+    valid_loader,
+    criterion,
+    optimizer,
+    device,
+    logger,
+    config,
+):
+    for epoch in range(config["epochs"]):
+        model.train()
+        total_loss = 0
+        num_batches = len(train_loader)
+
+        for batch_idx, batch in enumerate(train_loader):
+            loss = task.train_step(batch, model, criterion, optimizer, device)
+            total_loss += loss
+            # progress bar using sys.stdout
+            progress = (batch_idx + 1) / num_batches
+            bar_width = 30
+            bar = "#" * int(progress * bar_width) + "-" * (
+                bar_width - int(progress * bar_width)
+            )
+            sys.stdout.write(
+                f"\rEpoch {epoch + 1} [{bar}] {batch_idx + 1}/{num_batches} "
+                f"Loss: {loss:.4f}"
+            )
+            sys.stdout.flush()
+        avg_loss = total_loss / num_batches
+        sys.stdout.write("\n")
+        logger.info(f"Epoch {epoch + 1}: Train loss: {avg_loss:.4f}")
+        logger.info(
+            f"Epoch {epoch + 1}: Train loss: {total_loss / len(train_loader)}")
 
 
 def train_epoch(

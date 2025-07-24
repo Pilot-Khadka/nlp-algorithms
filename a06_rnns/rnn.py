@@ -3,6 +3,8 @@ import torch.nn as nn
 from engine.model_factory import BaseModel, create_model
 from engine.registry import register_model
 
+__register_model__ = True
+
 
 @register_model("rnn")
 class RNN(BaseModel):
@@ -12,13 +14,19 @@ class RNN(BaseModel):
         hidden_dim,
         output_dim,
         activation=nn.Tanh(),
+        num_layers=2,
+        **kwargs,
     ):
         super(RNN, self).__init__()
         self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
 
         # embed + hidden because
         # ht -> tanh(W h * xt + W h * ht-1 + b)
         self.i2h = nn.Linear(embedding_dim + hidden_dim, hidden_dim)
+        self.h2h = nn.ModuleList(
+            [nn.Linear(hidden_dim, hidden_dim) for i in range(self.num_layers)]
+        )
         self.h2o = nn.Linear(hidden_dim, output_dim)
         self.activation_fn = activation
 
@@ -35,17 +43,22 @@ class RNN(BaseModel):
         if hidden is None:
             hidden = self.init_hidden(batch_size, x.device)
 
+        outputs = []
+
         for t in range(seq_len):
-            # 32, 768
             x_t = x[:, t, :]  # (batch_size, embedding_dim)
-
-            # (batch_size, embedding + hidden)
-            # 32, 768 + 768
             combined = torch.cat([x_t, hidden], dim=1)
-            h_t = self.activation_fn(self.i2h(combined))  # feedback loop
+            h_t = self.activation_fn(self.i2h(combined))
+            for i in range(self.num_layers):
+                h_t = self.activation_fn(self.h2h[i](h_t))
 
-        output = self.h2o(h_t)  # (batch_size, output_dim)
-        return output
+            out_t = self.h2o(h_t)  # (batch_size, vocab_size)
+            outputs.append(out_t.unsqueeze(1))  # (batch_size, 1, vocab_size)
+            hidden = h_t  # carry hidden to next timestep
+
+        # (batch_size, seq_len, vocab_size)
+        outputs = torch.cat(outputs, dim=1)
+        return outputs
 
 
 def main():

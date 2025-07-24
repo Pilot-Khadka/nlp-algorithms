@@ -22,11 +22,17 @@ class LanguageModel(nn.Module):
         return self.model(emb, hidden)
 
 
-def create_model(model_type, vocab_size, embedding_dim, **model_kwargs):
+def create_model(cfg_model, dataset_bundle, cfg_task):
+    model_type = cfg_model.name
+    embedding_dim = cfg_model.embedding_dim
+    print("task:", cfg_task)
+
     if model_type not in MODEL_REGISTRY:
         raise ValueError(f"Model '{model_type}' is not registered.")
 
     CoreModelClass = MODEL_REGISTRY[model_type]
-    core_model = CoreModelClass(embedding_dim=embedding_dim, **model_kwargs)
+    model_kwargs = {k: v for k, v in cfg_model.items() if k not in ("name",)}
 
-    return LanguageModel(vocab_size, embedding_dim, core_model)
+    output_dim = cfg_task.get_output_dim(dataset_bundle)
+    core_model = CoreModelClass(output_dim=output_dim, **model_kwargs)
+    return LanguageModel(dataset_bundle.vocab_size, embedding_dim, core_model)

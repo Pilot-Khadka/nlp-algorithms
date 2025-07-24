@@ -3,6 +3,7 @@ import torch
 import requests
 from collections import Counter
 from torch.utils.data import Dataset, DataLoader
+from datasets.base import DatasetBundle
 
 DATA_DIR = "./ptb_data"
 URLS = {
@@ -11,10 +12,9 @@ URLS = {
     "test": "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.test.txt",
 }
 
-os.makedirs(DATA_DIR, exist_ok=True)
-
 
 def download_ptb():
+    os.makedirs(DATA_DIR, exist_ok=True)
     for split, url in URLS.items():
         file_path = os.path.join(DATA_DIR, f"{split}.txt")
         if not os.path.exists(file_path):
@@ -49,6 +49,10 @@ class PTBDataset(Dataset):
                 idx += 1
         return vocab
 
+    @property
+    def vocab_size(self):
+        return len(self.vocab)
+
     def __len__(self):
         return len(self.encoded) - self.seq_len
 
@@ -61,9 +65,10 @@ class PTBDataset(Dataset):
         return x, y  # next-token prediction
 
 
-def get_ptb_dataloaders(data_dir=None, seq_len=30, batch_size=32):
-    if data_dir is None:
-        data_dir = os.path.join(os.path.dirname(__file__), "ptb_data")
+def get_ptb_dataloaders(cfg):
+    batch_size = cfg.batch_size
+    seq_len = cfg.seq_len
+    data_dir = cfg.data_dir
 
     train_dataset = PTBDataset(os.path.join(
         data_dir, "train.txt"), seq_len=seq_len)
@@ -80,4 +85,4 @@ def get_ptb_dataloaders(data_dir=None, seq_len=30, batch_size=32):
     valid_loader = DataLoader(valid_dataset, batch_size=batch_size)
     test_loader = DataLoader(test_dataset, batch_size=batch_size)
 
-    return train_loader, valid_loader, test_loader, vocab
+    return DatasetBundle(train_loader, valid_loader, test_loader, vocab=vocab)

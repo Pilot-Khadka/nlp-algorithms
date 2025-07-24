@@ -1,0 +1,28 @@
+import sys
+import importlib.util
+from pathlib import Path
+
+
+def auto_register_models():
+    root = Path(__file__).resolve().parent.parent
+
+    sys.path.insert(0, str(root))
+
+    for item in sorted(root.iterdir()):
+        if item.is_dir() and item.name.startswith("a") and "_" in item.name:
+            for py_file in item.rglob("*.py"):
+                try:
+                    with open(py_file, "r", encoding="utf-8") as f:
+                        content = f.read()
+
+                    if "__register_model__ = True" not in content:
+                        continue
+
+                    rel_path = py_file.relative_to(root)
+                    module_parts = rel_path.with_suffix("").parts
+                    module_name = ".".join(module_parts)
+
+                    importlib.import_module(module_name)
+
+                except Exception as e:
+                    print(f"[WARN] Skipped {py_file}: {e}")
