@@ -1,0 +1,5 @@
+name: ptb
+batch_size: 32
+seq_len: 35
+data_dir: datasets/ptb_data/ 
+

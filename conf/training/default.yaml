@@ -1,0 +1,4 @@
+epochs: 30
+learning_rate: 0.001
+checkpoint_dir: checkpoints/
+
