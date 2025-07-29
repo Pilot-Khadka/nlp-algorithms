@@ -1,4 +1,5 @@
 name: bidirectional_rnn
+use_pretrained_embedding: True
 embedding_dim: 300
 hidden_dim: 256
 

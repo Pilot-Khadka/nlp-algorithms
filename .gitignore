@@ -6,6 +6,7 @@ Character level Bigram LM/makemore.py
 /.idea
 *.tar
 .pre-commit-config.yaml
+.env
 
 
 # Byte-compiled / optimized / DLL files

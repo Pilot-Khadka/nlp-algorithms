@@ -12,18 +12,7 @@ class BaseModel(nn.Module):
         return None
 
 
-class LanguageModel(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, model: BaseModel):
-        super().__init__()
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
-        self.model = model
-
-    def forward(self, x, hidden=None):
-        emb = self.embedding(x)
-        return self.model(emb, hidden)
-
-
-def create_model(cfg_model, dataset_bundle, cfg_task):
+def create_model(cfg_model, dataset_bundle, cfg_task, embedding_layer=None):
     task_name = cfg_task.name()
     model_type = cfg_model.name
     embedding_dim = cfg_model.embedding_dim
@@ -43,5 +32,9 @@ def create_model(cfg_model, dataset_bundle, cfg_task):
     model_kwargs = {k: v for k, v in cfg_model.items() if k not in ("name",)}
 
     output_dim = cfg_task.get_output_dim(dataset_bundle)
-    core_model = CoreModelClass(output_dim=output_dim, **model_kwargs)
-    return LanguageModel(dataset_bundle.vocab_size, embedding_dim, core_model)
+    core_model = CoreModelClass(
+        output_dim=output_dim,
+        embedding_layer=embedding_layer,
+        **model_kwargs,
+    )
+    return core_model

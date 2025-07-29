@@ -15,6 +15,7 @@ class RNN(BaseModel):
         output_dim,
         activation=nn.Tanh(),
         num_layers=2,
+        embedding=None,
         **kwargs,
     ):
         super(RNN, self).__init__()
@@ -23,6 +24,7 @@ class RNN(BaseModel):
 
         # embed + hidden because
         # ht -> tanh(W h * xt + W h * ht-1 + b)
+        self.embedding = embedding
         self.i2h = nn.Linear(embedding_dim + hidden_dim, hidden_dim)
         self.h2h = nn.ModuleList(
             [nn.Linear(hidden_dim, hidden_dim) for i in range(self.num_layers)]
@@ -34,6 +36,9 @@ class RNN(BaseModel):
         return torch.zeros(batch_size, self.hidden_dim, device=device)
 
     def forward(self, x, hidden=None):
+        if self.embedding:
+            x = self.embedding(x)
+
         # x shape: (batch_size, seq_len, embedding_dim)
         # 32, 10, 768
         batch_size, seq_len, _ = x.size()

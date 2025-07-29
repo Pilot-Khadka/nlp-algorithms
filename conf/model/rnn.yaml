@@ -4,4 +4,7 @@ hidden_dim: 256
 num_layers: 2
 dropout: 0.2
 bidirectional: false
-
+use_pretrained_embedding: True
+embedding_path: ./models/word2vec/word2vec_final.pt
+vocab_path: ./models/word2vec/vocab.pkl
+  
