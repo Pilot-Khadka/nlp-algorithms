@@ -22,7 +22,11 @@ def main(cfg: DictConfig):
     model.to(device)
 
     criterion = task.get_loss_function()
-    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.training.learning_rate)
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=cfg.training.learning_rate,
+        weight_decay=cfg.training.weight_decay,
+    )
 
     train_loader = dataset_bundle.train_loader
     valid_loader = dataset_bundle.valid_loader

@@ -1,3 +1,4 @@
+import sys
 import torch.nn as nn
 from engine.registry import MODEL_REGISTRY
 
@@ -23,9 +24,17 @@ class LanguageModel(nn.Module):
 
 
 def create_model(cfg_model, dataset_bundle, cfg_task):
+    task_name = cfg_task.name()
     model_type = cfg_model.name
     embedding_dim = cfg_model.embedding_dim
-    print("task:", cfg_task)
+
+    if task_name == "language_modeling" and "bidirectional" in model_type.lower():
+        print(
+            f"""Bidirectional model '{model_type}' cannot be used with task '{
+                task_name
+            }'."""
+        )
+        sys.exit(0)
 
     if model_type not in MODEL_REGISTRY:
         raise ValueError(f"Model '{model_type}' is not registered.")

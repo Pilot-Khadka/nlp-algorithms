@@ -1,4 +1,3 @@
-import sys
 import torch
 from tqdm import tqdm
 from utils.metrics import compute_metrics
@@ -17,28 +16,52 @@ def train(
 ):
     for epoch in range(config["epochs"]):
         model.train()
-        total_loss = 0
-        num_batches = len(train_loader)
+        total_train_loss = 0
+        train_progress = tqdm(
+            train_loader,
+            desc=f"Epoch {epoch + 1}/{config['epochs']} [Train]",
+            leave=False,
+        )
 
-        for batch_idx, batch in enumerate(train_loader):
+        for batch_idx, batch in enumerate(train_progress):
             loss = task.train_step(batch, model, criterion, optimizer, device)
-            total_loss += loss
-            # progress bar using sys.stdout
-            progress = (batch_idx + 1) / num_batches
-            bar_width = 30
-            bar = "#" * int(progress * bar_width) + "-" * (
-                bar_width - int(progress * bar_width)
+            total_train_loss += loss
+
+            train_progress.set_postfix(
+                {
+                    "Loss": f"{loss:.4f}",
+                    "Avg Loss": f"{total_train_loss / (batch_idx + 1):.4f}",
+                }
             )
-            sys.stdout.write(
-                f"\rEpoch {epoch + 1} [{bar}] {batch_idx + 1}/{num_batches} "
-                f"Loss: {loss:.4f}"
-            )
-            sys.stdout.flush()
-        avg_loss = total_loss / num_batches
-        sys.stdout.write("\n")
-        logger.info(f"Epoch {epoch + 1}: Train loss: {avg_loss:.4f}")
+        avg_train_loss = total_train_loss / len(train_loader)
+        # val
+        model.eval()
+        total_valid_loss = 0
+        valid_progress = tqdm(
+            valid_loader,
+            desc=f"Epoch {epoch + 1}/{config['epochs']} [Valid]",
+            leave=False,
+        )
+
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(valid_progress):
+                loss = task.eval_step(batch, model, criterion, device)
+
+                total_valid_loss += loss
+
+                valid_progress.set_postfix(
+                    {
+                        "Val Loss": f"{loss:.4f}",
+                        "Avg Val Loss": f"{total_valid_loss / (batch_idx + 1):.4f}",
+                    }
+                )
+
+        avg_valid_loss = total_valid_loss / len(valid_loader)
+
         logger.info(
-            f"Epoch {epoch + 1}: Train loss: {total_loss / len(train_loader)}")
+            f"""Epoch {epoch + 1}: Train loss: {avg_train_loss:.4f}, Valid loss: {
+                avg_valid_loss:.4f}"""
+        )
 
 
 def train_epoch(

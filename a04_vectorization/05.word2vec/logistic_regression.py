@@ -28,15 +28,12 @@ class LogisticRegression:
                 score = np.dot(center_vector, context_vector)
                 probab = self._sigmoid(score)
 
-                loss = -(label * np.log(probab) +
-                         (1 - label) * np.log(1 - probab))
+                loss = -(label * np.log(probab) + (1 - label) * np.log(1 - probab))
                 total_loss += loss
 
                 grad = probab - label
-                self.input_embedding[center_idx] -= self.lr * \
-                    grad * context_vector
-                self.output_embedding[context_idx] = self.lr * \
-                    grad * center_vector
+                self.input_embedding[center_idx] -= self.lr * grad * context_vector
+                self.output_embedding[context_idx] = self.lr * grad * center_vector
             self.losses.append(total_loss)
             print(f"Epoch {epoch + 1}, Loss: {total_loss:.4f}")
 

@@ -1,0 +1,4 @@
+name: bidirectional_rnn
+embedding_dim: 300
+hidden_dim: 256
+

@@ -27,9 +27,11 @@ class LanguageModelingTask(BaseTask):
         inputs, targets = inputs.to(device), targets.to(device)
         with torch.no_grad():
             outputs = model(inputs)
-            loss = criterion(
-                outputs.view(-1, outputs.size(-1)), targets.view(-1))
+            loss = criterion(outputs.view(-1, outputs.size(-1)), targets.view(-1))
         return loss.item()
 
     def compute_metrics(self, outputs, targets):
         return {}
+
+    def name(self):
+        return "language_modeling"

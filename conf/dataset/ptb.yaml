@@ -1,5 +1,8 @@
 name: ptb
 batch_size: 32
 seq_len: 35
-data_dir: datasets/ptb_data/ 
+data_dir: datasets/penn_treebank/ptb_data/ 
+train_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.train.txt"
+valid_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.valid.txt"
+test_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.test.txt"
 
