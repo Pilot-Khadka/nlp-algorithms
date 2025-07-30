@@ -1,5 +1,7 @@
 name: bidirectional_rnn
 use_pretrained_embedding: True
-embedding_dim: 300
+embedding_dim: 100
 hidden_dim: 256
+embedding_path: ./models/word2vec/word2vec_final.pt
+vocab_path: ./models/word2vec/vocab.pkl
 

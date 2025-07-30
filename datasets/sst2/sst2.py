@@ -8,6 +8,8 @@ from typing import List, Tuple, Optional, Dict
 from tqdm import tqdm
 from collections import Counter
 
+from models.model_registry import load_vocab
+
 
 class SST2Dataset(Dataset):
     """
@@ -301,22 +303,21 @@ class SST2Dataset(Dataset):
 
 
 def get_sst2_dataloaders(cfg):
-    batch_size = cfg.batch_size
+    batch_size = cfg.dataset.batch_size
 
-    train_dataset = SST2Dataset(cfg, "train")
-    vocab = train_dataset.get_vocab()
+    if cfg.model.use_pretrained_embedding:
+        vocab = load_vocab(cfg.model.vocab_path)
+    else:
+        vocab = None
 
-    valid_dataset = SST2Dataset(cfg, "valid", vocab=vocab)
-    test_dataset = SST2Dataset(cfg, "test", vocab=vocab)
+    train_dataset = SST2Dataset(cfg.dataset, "train", vocab=vocab)
+    final_vocab = train_dataset.get_vocab()  # either from Word2Vec or built
 
-    train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True)
-    valid_loader = DataLoader(valid_dataset, batch_size=batch_size)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size)
+    valid_dataset = SST2Dataset(cfg.dataset, "valid", vocab=final_vocab)
+    test_dataset = SST2Dataset(cfg.dataset, "test", vocab=final_vocab)
 
     return DatasetBundle(
-        train_loader,
-        valid_loader,
-        test_loader,
-    )
-
+        DataLoader(train_dataset, batch_size=batch_size, shuffle=True),
+        DataLoader(valid_dataset, batch_size=batch_size),
+        DataLoader(test_dataset, batch_size=batch_size),
+    ), final_vocab

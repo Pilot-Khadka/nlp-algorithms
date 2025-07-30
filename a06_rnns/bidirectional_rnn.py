@@ -26,6 +26,7 @@ class BidirectionalRNN(BaseModel):
         self.activation = nn.Tanh()
         self.dropout = nn.Dropout(dropout_rate)
 
+        self.embedding = kwargs.get("embedding_layer", None)
         self.i2h_f = nn.Linear(embedding_dim + hidden_dim, hidden_dim)
         self.i2h_b = nn.Linear(embedding_dim + hidden_dim, hidden_dim)
         self.output_layer = nn.Linear(2 * hidden_dim, output_dim)
@@ -34,11 +35,15 @@ class BidirectionalRNN(BaseModel):
         return torch.zeros(batch_size, self.hidden_dim, device=device)
 
     def forward(self, input_seq, hidden=None):
+        if self.embedding:
+            input_seq = self.embedding(input_seq)
         batch_size, seq_len, _ = input_seq.size()
 
         if hidden is None:
-            h_f = torch.zeros(batch_size, self.hidden_dim, device=input_seq.device)
-            h_b = torch.zeros(batch_size, self.hidden_dim, device=input_seq.device)
+            h_f = torch.zeros(batch_size, self.hidden_dim,
+                              device=input_seq.device)
+            h_b = torch.zeros(batch_size, self.hidden_dim,
+                              device=input_seq.device)
 
         outputs_f = []
         outputs_b = []

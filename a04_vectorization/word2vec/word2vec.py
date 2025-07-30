@@ -137,12 +137,12 @@ class Word2Vec(nn.Module):
 
     def save_model(self, filepath):
         checkpoint = {
-            "model_class": "Word2Vec",
+            "model_class": "word2vec",
             "model_args": {
                 "vocab_size": self.vocab_size,
                 "embedding_dim": self.embedding_dim,
             },
-            "model_state_dict": self.model.state_dict(),
+            "model_state_dict": self.state_dict(),
         }
         torch.save(checkpoint, filepath)
         print(f"Model saved to {filepath}")

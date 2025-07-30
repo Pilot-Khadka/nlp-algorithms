@@ -15,7 +15,6 @@ class RNN(BaseModel):
         output_dim,
         activation=nn.Tanh(),
         num_layers=2,
-        embedding=None,
         **kwargs,
     ):
         super(RNN, self).__init__()
@@ -24,7 +23,8 @@ class RNN(BaseModel):
 
         # embed + hidden because
         # ht -> tanh(W h * xt + W h * ht-1 + b)
-        self.embedding = embedding
+        self.embedding = kwargs.get("embedding_layer", None)
+
         self.i2h = nn.Linear(embedding_dim + hidden_dim, hidden_dim)
         self.h2h = nn.ModuleList(
             [nn.Linear(hidden_dim, hidden_dim) for i in range(self.num_layers)]

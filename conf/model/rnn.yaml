@@ -1,5 +1,5 @@
 name: rnn
-embedding_dim: 300
+embedding_dim: 100
 hidden_dim: 256
 num_layers: 2
 dropout: 0.2

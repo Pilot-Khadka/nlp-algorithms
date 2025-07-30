@@ -4,6 +4,7 @@ import torch
 import argparse
 
 from tqdm import tqdm
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from one_billion_dataset import (
     load_corpus,
@@ -27,7 +28,7 @@ def parse_args():
     parser.add_argument(
         "--save_dir",
         type=str,
-        default="./models",
+        default="../../models/word2vec/",
         help="Directory to save model and vocab",
     )
     parser.add_argument(
@@ -66,7 +67,37 @@ def parse_args():
     return parser.parse_args()
 
 
+def add_special_tokens_to_vocab(
+    word2idx,
+    idx2word,
+    word_freq,
+    special_tokens=["<pad>", "<unk>", "<eos>"],
+):
+    new_word2idx = {}
+    new_idx2word = {}
+    new_word_freq = {}
+
+    offset = len(special_tokens)
+
+    for i, token in enumerate(special_tokens):
+        new_word2idx[token] = i
+        new_idx2word[i] = token
+        new_word_freq[token] = 0
+
+    for word, old_idx in word2idx.items():
+        new_idx = old_idx + offset
+        new_word2idx[word] = new_idx
+        new_idx2word[new_idx] = word
+        new_word_freq[word] = word_freq[word]
+
+    return new_word2idx, new_idx2word, new_word_freq
+
+
 def save_vocab(word2idx, idx2word, word_freq, filepath):
+    word2idx, idx2word, word_freq = add_special_tokens_to_vocab(
+        word2idx, idx2word, word_freq
+    )
+
     vocab_data = {"word2idx": word2idx,
                   "idx2word": idx2word, "word_freq": word_freq}
     with open(filepath, "wb") as f:
@@ -85,7 +116,7 @@ def train_word2vec(
     token_ids,
     word_freq,
     vocab_size,
-    embedding_dim=100,
+    embedding_dim=512,
     window_size=5,
     num_negatives=5,
     batch_size=512,
