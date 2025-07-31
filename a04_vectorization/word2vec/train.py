@@ -67,39 +67,8 @@ def parse_args():
     return parser.parse_args()
 
 
-def add_special_tokens_to_vocab(
-    word2idx,
-    idx2word,
-    word_freq,
-    special_tokens=["<pad>", "<unk>", "<eos>"],
-):
-    new_word2idx = {}
-    new_idx2word = {}
-    new_word_freq = {}
-
-    offset = len(special_tokens)
-
-    for i, token in enumerate(special_tokens):
-        new_word2idx[token] = i
-        new_idx2word[i] = token
-        new_word_freq[token] = 0
-
-    for word, old_idx in word2idx.items():
-        new_idx = old_idx + offset
-        new_word2idx[word] = new_idx
-        new_idx2word[new_idx] = word
-        new_word_freq[word] = word_freq[word]
-
-    return new_word2idx, new_idx2word, new_word_freq
-
-
 def save_vocab(word2idx, idx2word, word_freq, filepath):
-    word2idx, idx2word, word_freq = add_special_tokens_to_vocab(
-        word2idx, idx2word, word_freq
-    )
-
-    vocab_data = {"word2idx": word2idx,
-                  "idx2word": idx2word, "word_freq": word_freq}
+    vocab_data = {"word2idx": word2idx, "idx2word": idx2word, "word_freq": word_freq}
     with open(filepath, "wb") as f:
         pickle.dump(vocab_data, f)
     print(f"Vocabulary saved to {filepath}")
@@ -138,8 +107,7 @@ def train_word2vec(
 
     model = Word2Vec(vocab_size, embedding_dim).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.003)
-    scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer, step_size=2, gamma=0.8)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=2, gamma=0.8)
 
     sampler = UnigramSampler(word_freq)
 
@@ -179,12 +147,10 @@ def train_word2vec(
 
         scheduler.step()
         avg_loss = total_loss / len(dataloader)
-        print(
-            f"Epoch {epoch + 1}/{epochs} completed - Average Loss: {avg_loss:.4f}")
+        print(f"Epoch {epoch + 1}/{epochs} completed - Average Loss: {avg_loss:.4f}")
 
         if (epoch + 1) % save_every == 0:
-            checkpoint_path = os.path.join(
-                save_dir, f"word2vec_epoch_{epoch + 1}.pt")
+            checkpoint_path = os.path.join(save_dir, f"word2vec_epoch_{epoch + 1}.pt")
             model.save_model(checkpoint_path)
 
     final_model_path = os.path.join(save_dir, "word2vec_final.pt")
@@ -220,10 +186,8 @@ def main():
 
     os.makedirs(args.save_dir, exist_ok=True)
 
-    tokens, counter = load_corpus(
-        args.data_dir, max_sentences=args.max_sentences)
-    word2idx, idx2word, word_freq = build_vocab(
-        counter, min_count=args.min_count)
+    tokens, counter = load_corpus(args.data_dir, max_sentences=args.max_sentences)
+    word2idx, idx2word, word_freq = build_vocab(counter, min_count=args.min_count)
     token_ids = tokens_to_ids(tokens, word2idx)
 
     print(f"Vocabulary size: {len(word2idx)}")

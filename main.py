@@ -14,10 +14,12 @@ from models.model_registry import load_model_from_name, load_vocab
 @hydra.main(config_path="conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
     logger = setup_logging()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = "cpu"
     logger.info(f"Using device: {device}")
 
-    dataset_bundle = load_dataset(cfg)
+    print("cfg.dataset:", cfg.dataset)
+    dataset_bundle, vocab = load_dataset(cfg)
     task = load_task(cfg.task.name)
 
     if cfg.model.use_pretrained_embedding:
@@ -25,18 +27,28 @@ def main(cfg: DictConfig):
         assert cfg.model.vocab_path is not None, "vocab_path is required"
 
         w2v_model = load_model_from_name(cfg.model.embedding_path)
-        vocab = load_vocab(cfg.model.vocab_path)
-        pretrained_weights = w2v_model.get_input_embeddings().clone().detach().cpu()
-        assert len(vocab) == pretrained_weights.shape[0], f"""Vocab size {
-            len(vocab)
-        } doesn't match embedding shape {pretrained_weights.shape}"""
 
-        embedding_layer = nn.Embedding.from_pretrained(pretrained_weights, freeze=False)
+        if not vocab:
+            vocab = load_vocab(cfg.model.vocab_path)
+
+        pretrained_weights = w2v_model.get_input_embeddings().clone().detach().cpu()
+        vocab_size = pretrained_weights.shape[0]
+        embedding_layer = nn.Embedding(len(vocab), cfg.model.embedding_dim)
+        embedding_layer.weight.data[:vocab_size] = pretrained_weights
+        nn.init.normal_(embedding_layer.weight.data[vocab_size:])
+        assert len(vocab) == embedding_layer.weight.shape[0], f"""Vocab size {
+            len(vocab)
+        } doesn't match embedding shape {embedding_layer.weight.shape}"""
+        # embedding_layer = nn.Embedding.from_pretrained(pretrained_weights, freeze=False)
     else:
         embedding_layer = None
 
     model = create_model(
-        cfg.model, dataset_bundle, task, embedding_layer=embedding_layer, vocab=vocab
+        cfg.model,
+        dataset_bundle,
+        task,
+        embedding_layer=embedding_layer,
+        vocab=vocab,
     )
     print("model:", model)
     model.to(device)

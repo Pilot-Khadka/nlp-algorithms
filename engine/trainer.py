@@ -1,6 +1,5 @@
 import torch
 from tqdm import tqdm
-from utils.metrics import compute_metrics
 
 
 def train(
@@ -34,9 +33,9 @@ def train(
                 }
             )
         avg_train_loss = total_train_loss / len(train_loader)
-        # val
         model.eval()
         total_valid_loss = 0
+        all_metrics = []
         valid_progress = tqdm(
             valid_loader,
             desc=f"Epoch {epoch + 1}/{config['epochs']} [Valid]",
@@ -45,9 +44,9 @@ def train(
 
         with torch.no_grad():
             for batch_idx, batch in enumerate(valid_progress):
-                loss = task.eval_step(batch, model, criterion, device)
-
+                loss, batch_metrics = task.eval_step(batch, model, criterion, device)
                 total_valid_loss += loss
+                all_metrics.append(batch_metrics)
 
                 valid_progress.set_postfix(
                     {
@@ -57,90 +56,83 @@ def train(
                 )
 
         avg_valid_loss = total_valid_loss / len(valid_loader)
+        aggregated_metrics = aggregate_metrics(all_metrics)
 
         logger.info(
             f"""Epoch {epoch + 1}: Train loss: {avg_train_loss:.4f}, Valid loss: {
                 avg_valid_loss:.4f}"""
         )
 
-
-def train_epoch(
-    model,
-    embedding,
-    train_loader,
-    optimizer,
-    criterion,
-    device,
-    logger,
-    metrics_fn=None,
-):
-    model.train()
-    embedding.train()
-
-    total_loss = 0
-    num_batches = len(train_loader)
-
-    with tqdm(train_loader, desc="Training", leave=False) as pbar:
-        for batch_idx, (x, y) in enumerate(pbar):
-            x, y = x.to(device), y.to(device)
-
-            x_embed = embedding(x)
-            output = model(x_embed)
-            loss = criterion(output, y[:, -1])  # Predict last token
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            total_loss += loss.item()
-            avg_loss = total_loss / (batch_idx + 1)
-
-            pbar.set_postfix(
-                {"loss": f"{loss.item():.4f}", "avg_loss": f"{avg_loss:.4f}"}
-            )
-
-    avg_loss = total_loss / num_batches
-    metrics = {}
-    if metrics_fn is not None:
-        metrics = compute_metrics(metrics_fn, avg_loss=avg_loss)
-
-    for k, v in metrics.items():
-        logger.info(f"Training - {k}: {v:.4f}")
-    logger.info(f"Training - Average Loss: {avg_loss:.4f}")
-    return avg_loss, metrics
+        display_metrics_matrix(logger, aggregated_metrics)
 
 
-def validate_epoch(
-    model, embedding, valid_loader, criterion, device, logger, metrics_fn=None
-):
-    model.eval()
-    embedding.eval()
+def display_metrics_matrix(logger, metrics):
+    if not metrics:
+        return
 
-    total_loss = 0
-    num_batches = len(valid_loader)
+    filtered_metrics = {k: v for k, v in metrics.items() if k != "batch_size"}
 
-    with torch.no_grad():
-        with tqdm(valid_loader, desc="Validation", leave=False) as pbar:
-            for batch_idx, (x, y) in enumerate(pbar):
-                x, y = x.to(device), y.to(device)
+    per_class_metrics = {}
+    overall_metrics = {}
 
-                x_embed = embedding(x)
-                output = model(x_embed)
-                loss = criterion(output, y[:, -1])  # Predict last token
+    for key, value in filtered_metrics.items():
+        if "_class_" in key:
+            parts = key.split("_class_")
+            metric_type = parts[0]
+            class_idx = int(parts[1])
 
-                total_loss += loss.item()
-                avg_loss = total_loss / (batch_idx + 1)
+            if metric_type not in per_class_metrics:
+                per_class_metrics[metric_type] = {}
+            per_class_metrics[metric_type][class_idx] = value
+        else:
+            overall_metrics[key] = value
 
-                pbar.set_postfix(
-                    {"loss": f"{loss.item():.4f}", "avg_loss": f"{avg_loss:.4f}"}
-                )
+    logger.info("Valid Metrics:")
 
-    avg_loss = total_loss / num_batches
-    metrics = {}
-    if metrics_fn is not None:
-        metrics = compute_metrics(metrics_fn, avg_loss=avg_loss)
+    if overall_metrics:
+        for metric_name, metric_value in overall_metrics.items():
+            logger.info(f"  {metric_name}: {metric_value:.4f}")
 
-    for k, v in metrics.items():
-        logger.info(f"Validation - {k}: {v:.4f}")
-    logger.info(f"Validation - Average Loss: {avg_loss:.4f}")
-    return avg_loss, metrics
+    if per_class_metrics:
+        metric_types = sorted(per_class_metrics.keys())
+        all_classes = set()
+        for metric_dict in per_class_metrics.values():
+            all_classes.update(metric_dict.keys())
+        all_classes = sorted(all_classes)
+
+        if metric_types and all_classes:
+            logger.info("  Per-Class:")
+
+            header = "    Class"
+            separator = "    -----"
+            for metric_type in metric_types:
+                header += f" | {metric_type:>9}"
+                separator += f"-|-{'-' * 9}"
+
+            logger.info(header)
+            logger.info(separator)
+
+            for class_idx in all_classes:
+                row = f"    {class_idx:5d}"
+                for metric_type in metric_types:
+                    value = per_class_metrics[metric_type].get(class_idx, 0.0)
+                    row += f" | {value:9.4f}"
+                logger.info(row)
+
+
+def aggregate_metrics(all_metrics):
+    if not all_metrics:
+        return {}
+
+    metric_names = [key for key in all_metrics[0].keys() if key != "batch_size"]
+
+    aggregated = {}
+    total_samples = sum(metrics["batch_size"] for metrics in all_metrics)
+
+    for metric_name in metric_names:
+        weighted_sum = sum(
+            metrics[metric_name] * metrics["batch_size"] for metrics in all_metrics
+        )
+        aggregated[metric_name] = weighted_sum / total_samples
+
+    return aggregated
