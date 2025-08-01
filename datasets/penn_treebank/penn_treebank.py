@@ -5,13 +5,17 @@ from collections import Counter
 from torch.utils.data import Dataset, DataLoader
 from datasets.base import DatasetBundle
 from tqdm import tqdm
+from typing import Dict
+
+from models.model_registry import load_vocab
 
 
 class PTBDataset(Dataset):
     def __init__(self, cfg, split, vocab=None):
-        self.data_dir = cfg["data_dir"]
-        self.seq_len = cfg["seq_len"]
+        self.data_dir = cfg.dataset["data_dir"]
+        self.seq_len = cfg.dataset["seq_len"]
         self.split = split
+        self.use_pretrained_embedding = cfg.model.get("use_pretrained_embedding", False)
 
         if not os.path.exists(self.data_dir):
             self.urls = {
@@ -22,6 +26,46 @@ class PTBDataset(Dataset):
             self.download_ptb()
 
         self.encoded = self.load_data(split, vocab)
+        if vocab is None and split == "train":
+            if self.use_pretrained_embedding:
+                pretrained_vocab = load_vocab(cfg.model.get("vocab_path"))
+                self.vocab = self._ensure_special_tokens(pretrained_vocab)
+            else:
+                self.vocab = self.build_vocab(self.sentences)
+            print(f"Built vocabulary with {len(self.vocab)} tokens")
+        elif vocab is not None:
+            self.vocab = vocab
+        else:
+            raise ValueError(
+                "Vocabulary must be provided for non-train splits or build from train split first"
+            )
+
+    def _ensure_special_tokens(self, pretrained_vocab: Dict) -> Dict[str, int]:
+        special_tokens = ["<pad>", "<unk>", "<eos>"]
+
+        word2idx = pretrained_vocab["word2idx"].copy()
+        idx2word = pretrained_vocab["idx2word"].copy()
+        word_freq = pretrained_vocab.get("word_freq", [])
+
+        max_idx = max(word2idx.values()) if word2idx else -1
+        next_idx = max_idx + 1
+
+        for token in special_tokens:
+            if token not in word2idx:
+                word2idx[token] = next_idx
+                idx2word[next_idx] = token
+
+                if isinstance(word_freq, dict):
+                    word_freq[token] = 1
+                elif isinstance(word_freq, list):
+                    while len(word_freq) <= next_idx:
+                        word_freq.append(1)
+                    word_freq[next_idx] = 1
+
+                print(f"Added special token '{token}' with index {next_idx}")
+                next_idx += 1
+
+        return word2idx
 
     def download_ptb(self):
         os.makedirs(self.data_dir, exist_ok=True)
@@ -60,8 +104,7 @@ class PTBDataset(Dataset):
         else:
             self.vocab = vocab
 
-        encoded = [self.vocab.get(token, self.vocab["<unk>"])
-                   for token in text]
+        encoded = [self.vocab.get(token, self.vocab["<unk>"]) for token in text]
         return encoded
 
     def build_vocab(self, tokens, min_freq=1):
@@ -86,16 +129,15 @@ class PTBDataset(Dataset):
         return len(self.encoded) - self.seq_len
 
     def __getitem__(self, idx):
-        x = torch.tensor(
-            self.encoded[idx: idx + self.seq_len], dtype=torch.long)
+        x = torch.tensor(self.encoded[idx : idx + self.seq_len], dtype=torch.long)
         y = torch.tensor(
-            self.encoded[idx + 1: idx + self.seq_len + 1], dtype=torch.long
+            self.encoded[idx + 1 : idx + self.seq_len + 1], dtype=torch.long
         )
         return x, y  # next-token prediction
 
 
 def get_ptb_dataloaders(cfg):
-    batch_size = cfg.batch_size
+    batch_size = cfg.dataset.batch_size
 
     train_dataset = PTBDataset(cfg, split="train")
     vocab = train_dataset.get_vocab()
@@ -103,8 +145,7 @@ def get_ptb_dataloaders(cfg):
     valid_dataset = PTBDataset(cfg, split="valid", vocab=vocab)
     test_dataset = PTBDataset(cfg, split="test", vocab=vocab)
 
-    train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     valid_loader = DataLoader(valid_dataset, batch_size=batch_size)
     test_loader = DataLoader(test_dataset, batch_size=batch_size)
 

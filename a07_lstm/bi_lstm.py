@@ -6,8 +6,8 @@ from engine.registry import register_model
 __register_model__ = True
 
 
-@register_model("lstm")
-class LSTM(BaseModel):
+@register_model("bi_lstm")
+class BiLSTM(BaseModel):
     def __init__(
         self,
         embedding_dim,
@@ -54,39 +54,3 @@ class LSTM(BaseModel):
         # return self.fc(h_t)  # optional output projection
         out = torch.cat(outputs, dim=1)
         return self.fc(out) if self.fc else out
-
-
-def main():
-    pass
-
-
-if __name__ == "__main__":
-    model = LSTM(embedding_dim=10, hidden_dim=20, output_dim=5)
-    print(model)
-
-    x_dummy = torch.randn(3, 7, 10)  # (batch_size, seq_len, embedding_dim)
-    output = model(x_dummy)
-    print("Output shape:", output.shape)
-    print("Any NaNs in output?", torch.isnan(output).any().item())
-    print("Output max abs:", output.abs().max().item())
-    output.mean().backward()  # dummy loss
-
-    for name, param in model.named_parameters():
-        if param.grad is not None:
-            print(f"{name} grad norm:", param.grad.norm().item())
-        else:
-            print(f"{name} has no grad")
-
-    x = torch.randn(100, 7, 10)
-    y = (x.sum(dim=(1, 2)) > 0).long()
-
-    loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-
-    for epoch in range(100):
-        optimizer.zero_grad()
-        logits = model(x)
-        loss = loss_fn(logits, y)
-        loss.backward()
-        optimizer.step()
-        print(f"Epoch {epoch}, Loss: {loss.item()}")

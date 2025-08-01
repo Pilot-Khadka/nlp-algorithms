@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from engine.model_factory import BaseModel, create_model
+from engine.model_factory import BaseModel
 from engine.registry import register_model
 
 __register_model__ = True
@@ -64,28 +64,3 @@ class RNN(BaseModel):
         # (batch_size, seq_len, vocab_size)
         outputs = torch.cat(outputs, dim=1)
         return outputs
-
-
-def main():
-    batch_size = 32
-    seq_len = 10
-    embedding_dim = 768
-    vocab = 100
-
-    model = create_model(
-        model_type="rnn",
-        vocab_size=vocab,
-        embedding_dim=embedding_dim,
-        hidden_dim=256,
-        output_dim=vocab,
-    )
-
-    # token indices
-    dummy_input = torch.randint(0, vocab, (batch_size, seq_len))
-
-    output = model(dummy_input)
-    print(output.shape)  # torch.Size([32, 10])
-
-
-if __name__ == "__main__":
-    main()

@@ -1,0 +1,6 @@
+name: imdb 
+batch_size: 32
+seq_len: 512
+data_dir: datasets/imdb/imdb_data/ 
+url: http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz
+archive_name: aclImdb_v1.tar.gz
