@@ -1,4 +1,5 @@
 import torch.nn as nn
+from typing import Any
 from engine.registry import MODEL_REGISTRY
 from models.model_registry import load_model_from_name
 
@@ -7,7 +8,7 @@ class BaseModel(nn.Module):
     def forward(self, x, hidden=None):
         raise NotImplementedError
 
-    def init_hidden(self, batch_size, device):
+    def init_hidden(self, batch_size, device) -> Any:
         # override for models that need hidden states
         return None
 

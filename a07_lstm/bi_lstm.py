@@ -36,13 +36,16 @@ class BiLSTM(BaseModel):
         self.sigmoid = nn.Sigmoid()
         self.tanh = nn.Tanh()
 
-    def forward(self, x):
+    def forward(self, x, hidden=None):
         if self.embedding:
             x = self.embedding(x)
         batch_size, seq_len, _ = x.size()
 
         # forward direction
-        h_t_f = torch.zeros(batch_size, self.hidden_dim, device=x.device)
+        if hidden is None:
+            h_t_f = torch.zeros(batch_size, self.hidden_dim, device=x.device)
+        else:
+            h_t_f = hidden
         c_t_f = torch.zeros(batch_size, self.hidden_dim, device=x.device)
         outputs_f = []
 

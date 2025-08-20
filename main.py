@@ -2,7 +2,6 @@ import hydra
 import torch
 from omegaconf import DictConfig
 
-
 from engine.task_factory import load_task
 from engine.model_factory import ModelFactory
 from datasets.loader import load_dataset
@@ -27,6 +26,7 @@ def main(cfg: DictConfig):
         dataset_bundle,
         task,
     )
+    print("mode:", model)
     model.to(device)
 
     criterion = task.get_loss_function()

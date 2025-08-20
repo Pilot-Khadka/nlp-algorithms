@@ -1,12 +1,9 @@
 tests/
-Character level Bigram LM/main.py
-Character level Bigram LM/makemore.ipynb
-Character level Bigram LM/makemore.py
-/.idea
 /.idea
 *.tar
 .pre-commit-config.yaml
 .env
+track_progress.txt
 
 
 # Byte-compiled / optimized / DLL files

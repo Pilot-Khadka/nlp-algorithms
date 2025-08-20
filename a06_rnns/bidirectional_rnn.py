@@ -37,27 +37,29 @@ class BidirectionalRNN(BaseModel):
             torch.zeros(batch_size, self.hidden_dim, device=device),
         )
 
-    def forward(self, input_seq, hidden=None):
+    def forward(self, x, hidden=None):
         if self.embedding:
-            input_seq = self.embedding(input_seq)
-        batch_size, seq_len, _ = input_seq.size()
+            x = self.embedding(x)
+        batch_size, seq_len, _ = x.size()
 
         if hidden is None:
-            h_f, h_b = self.init_hidden(batch_size, input_seq.device)
+            h_f, h_b = self.init_hidden(batch_size, x.device)
+        else:
+            h_f, h_b = hidden
 
         outputs_f = []
         outputs_b = []
 
         # forward direction
         for t in range(seq_len):
-            x_t = input_seq[:, t, :]
+            x_t = x[:, t, :]
             h_f = self.activation(self.i2h_f(torch.cat((x_t, h_f), dim=1)))
             h_f = self.dropout(h_f)
             outputs_f.append(h_f)
 
         # backward direction
         for t in reversed(range(seq_len)):
-            x_t = input_seq[:, t, :]
+            x_t = x[:, t, :]
             h_b = self.activation(self.i2h_b(torch.cat((x_t, h_b), dim=1)))
             h_b = self.dropout(h_b)
             outputs_b.append(h_b)

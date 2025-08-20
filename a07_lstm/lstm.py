@@ -30,11 +30,14 @@ class LSTM(BaseModel):
         self.sigmoid = nn.Sigmoid()
         self.tanh = nn.Tanh()
 
-    def forward(self, x):
+    def forward(self, x, hidden=None):
         if self.embedding:
             x = self.embedding(x)
         batch_size, seq_len, _ = x.size()
-        h_t = torch.zeros(batch_size, self.hidden_dim, device=x.device)
+        if hidden is None:
+            h_t = torch.zeros(batch_size, self.hidden_dim, device=x.device)
+        else:
+            h_t = hidden
         c_t = torch.zeros(batch_size, self.hidden_dim, device=x.device)
 
         outputs = []
@@ -51,7 +54,6 @@ class LSTM(BaseModel):
             h_t = o_t * self.tanh(c_t)
             outputs.append(h_t.unsqueeze(1))  # (B, 1, H)
 
-        # return self.fc(h_t)  # optional output projection
         out = torch.cat(outputs, dim=1)
         return self.fc(out) if self.fc else out
 
