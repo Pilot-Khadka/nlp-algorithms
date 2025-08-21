@@ -32,6 +32,54 @@ class MultiHeadAttention(nn.Module):
         self.num_heads = num_heads
         self.d_k = d_model // num_heads
 
+        # combined weight matrix for Q, K, and V
+        # single matrix of size (d_model, 3 * d_model)
+        self.w_qkv = nn.Parameter(torch.randn(d_model, 3 * d_model))
+        self.w_o = nn.Parameter(torch.randn(d_model, d_model))
+
+    def forward(self, x, mask=None):
+        batch_size, seq_length, dim = x.size()
+
+        # output tensor will have dim: (batch_size, seq_length, 3 * d_model)
+        qkv = x @ self.w_qkv
+
+        q, k, v = torch.chunk(qkv, 3, dim=-1)
+
+        def reshape_and_transpose(tensor):
+            return tensor.view(
+                batch_size, seq_length, self.num_heads, self.d_k
+            ).transpose(1, 2)
+
+        q = reshape_and_transpose(q)
+        k = reshape_and_transpose(k)
+        v = reshape_and_transpose(v)
+
+        scaled_dot_product = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
+
+        if mask is not None:
+            scaled_dot_product.masked_fill_(mask == 0, float("-inf"))
+
+        attention_weights = torch.softmax(scaled_dot_product, dim=-1)
+
+        out = torch.matmul(attention_weights, v)
+
+        # concat heads and apply final linear layer
+        out = out.transpose(1, 2).contiguous().view(batch_size, seq_length, dim)
+        return out @ self.w_o
+
+
+class MultiHeadAttentionNaive(nn.Module):
+    """
+    Textbook implementation of multiheaded attention,
+    slower because matrix multiplication is separated
+    """
+
+    def __init__(self, d_model, num_heads):
+        super().__init__()
+        assert d_model % num_heads == 0
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
+
         self.w_q = nn.Parameter(torch.randn(d_model, d_model))
         self.w_k = nn.Parameter(torch.randn(d_model, d_model))
         self.w_v = nn.Parameter(torch.randn(d_model, d_model))
@@ -55,8 +103,7 @@ class MultiHeadAttention(nn.Module):
         v = transform(v, self.w_v, batch_size, seq_length)
 
         out = scaled_dot_product(q, k, v, mask)
-        out = out.transpose(1, 2).contiguous().view(
-            batch_size, seq_length, dim)
+        out = out.transpose(1, 2).contiguous().view(batch_size, seq_length, dim)
         return out @ self.w_o
 
 

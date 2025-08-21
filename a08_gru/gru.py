@@ -10,6 +10,59 @@ __register_model__ = True
 class GRU(BaseModel):
     def __init__(self, embedding_dim, hidden_dim, output_dim, **kwargs):
         super().__init__()
+        self.hidden_dim = hidden_dim
+        input_size = embedding_dim + hidden_dim
+        self.embedding = kwargs.get("embedding_layer", None)
+
+        # fused layer for reset and update gates
+        self.w_rz = nn.Linear(input_size, 2 * hidden_dim)
+
+        self.w_h = nn.Linear(input_size, hidden_dim)
+
+        self.fc = nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, x, hidden=None):
+        if self.embedding:
+            x = self.embedding(x)
+        batch_size, seq_len, _ = x.size()
+
+        if hidden is None:
+            h_t = torch.zeros(
+                batch_size, self.hidden_dim, device=x.device, dtype=x.dtype
+            )
+        else:
+            h_t = hidden
+
+        outputs = []
+        for t in range(seq_len):
+            x_t = x[:, t, :]
+            combined_input = torch.cat([x_t, h_t], dim=1)
+
+            rz_combined = self.w_rz(combined_input)
+
+            r_t, z_t = rz_combined.chunk(2, dim=1)
+
+            r_t = torch.sigmoid(r_t)
+            z_t = torch.sigmoid(z_t)
+
+            # reset gate applied to previous hidden state
+            h_reset = r_t * h_t
+
+            candidate_input = torch.cat([x_t, h_reset], dim=1)
+
+            h_t_candidate = torch.tanh(self.w_h(candidate_input))
+
+            h_t = (1.0 - z_t) * h_t_candidate + z_t * h_t
+
+            outputs.append(h_t.unsqueeze(1))
+
+        out = torch.cat(outputs, dim=1)
+        return self.fc(out)
+
+
+class GRUNaive(BaseModel):
+    def __init__(self, embedding_dim, hidden_dim, output_dim, **kwargs):
+        super().__init__()
 
         self.hidden_dim = hidden_dim
 

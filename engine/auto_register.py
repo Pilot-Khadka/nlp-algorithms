@@ -1,5 +1,5 @@
 import sys
-import importlib.util
+import importlib
 from pathlib import Path
 
 
