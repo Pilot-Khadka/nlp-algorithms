@@ -55,7 +55,7 @@ class DecoderBlock(nn.Module):
     ):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, d_model)
-        self.pos = PositionalEncoding(d_model)
+        self.pos = PositionalEncoding(d_model=d_model, method="sinusodial")
         self.layers = nn.ModuleList(
             [DecoderLayer(d_model, num_heads, d_ff) for _ in range(num_layers)]
         )

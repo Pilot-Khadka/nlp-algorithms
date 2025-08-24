@@ -5,53 +5,56 @@ import torch.nn as nn
 
 class PositionalEncoding(nn.Module):
     """
-    Positional encoding as described in "attention is all you need"
-
-    Formula:
-    PE(pos, 2i)   = sin(pos / 10000^(2i/d_model))
-    PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
-
-    Where:
-    - pos: position of the token in the sequence (0, 1, 2, ...)
-    - i: dimension index (0, 1, 2, ..., d_model//2-1)
-    - d_model: embedding dimension
-
-    eg: "Hello world" with d_model=512:
-
-    a). word: Hello [1, 512]
-      - PE(0, 0) = sin(0 / 10000^(0/512)) = sin(0) = 0
-      - PE(0, 1) = cos(0 / 10000^(0/512)) = cos(0) = 1
-      - PE(0, 2) = sin(0 / 10000^(2/512)) = sin(0) = 0
-      - PE(0, 3) = cos(0 / 10000^(2/512)) = cos(0) = 1
-      - ... and so on for all 512 dimensions
-
-    - token "world" at position 1:
-      - PE(1, 0) = sin(1 / 10000^(0/512)) = sin(1) ≈ 0.841
-      - PE(1, 1) = cos(1 / 10000^(0/512)) = cos(1) ≈ 0.540
-      - ... and so on
+    Args:
+        d_model (int): The embedding dimension.
+        max_len (int): The maximum length of the sequence.
+        method (str): The type of positional encoding to use.
+                      Can be 'sinusoidal' or 'learned'.
     """
 
-    def __init__(self, dim, max_len=10000):
+    def __init__(self, d_model, max_len=5000, method="sinusoidal"):
         super().__init__()
-        pe = torch.zeros(max_len, dim)
-        position = torch.arange(0, max_len).unsqueeze(1)
+        self.d_model = d_model
+        self.method = method
 
-        # exp + log : numerical stability
-        # for large dim, 10,000 ^(10023/1024)
-        # a^b = exp(b * ln(a))
-        # arange(0, dim, 2) -> even terms only
-        div_term = torch.exp(torch.arange(0, dim, 2) * (-math.log(10000.0) / dim))
+        if self.method == "sinusoidal":
+            # sinusodial positional encoding as described in "Attention Is All You Need"
+            self.pe = torch.zeros(max_len, d_model)
+            position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
 
-        # even indices: 0, 2, 4 ..
-        pe[:, 0::2] = torch.sin(position * div_term)
+            div_term = torch.exp(
+                torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+            )
 
-        # odd indices: 1, 3, 5 ..
-        pe[:, 1::2] = torch.cos(position * div_term)
+            self.pe[:, 0::2] = torch.sin(position * div_term)
+            self.pe[:, 1::2] = torch.cos(position * div_term)
 
-        self.pe = pe.unsqueeze(0)
+            # register buffer to prevent the tensor from being considered a model parameter
+            self.register_buffer("pe", self.pe.unsqueeze(0))
+
+        elif self.method == "learned":
+            # learned positional embeddings, similar to what BERT uses
+            self.pos_embedding = nn.Embedding(max_len, d_model)
+
+        else:
+            raise ValueError("Method must be 'sinusoidal' or 'learned'")
 
     def forward(self, x):
-        return x + self.pe[:, : x.size(1)].to(x.device)
+        """
+        Args:
+            x (torch.Tensor): The input tensor of shape (batch_size, seq_len, d_model).
+
+        Returns:
+            torch.Tensor: The input tensor with positional encoding added.
+        """
+        seq_len = x.size(1)
+
+        if self.method == "sinusoidal":
+            return x + self.pe[:, :seq_len, :]
+
+        elif self.method == "learned":
+            positions = torch.arange(0, seq_len, device=x.device).unsqueeze(0)
+            return x + self.pos_embedding(positions)
 
 
 if __name__ == "__main__":

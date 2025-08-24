@@ -1,6 +1,8 @@
-import math
 import torch
 import torch.nn as nn
+
+from a09_attention.attention import MultiHeadAttention
+from common.positional_encoding import PositionalEncoding
 
 
 class FeedForward(nn.Module):
@@ -13,69 +15,6 @@ class FeedForward(nn.Module):
         return self.linear2(torch.relu(self.linear1(x)))
 
 
-class PositionalEncoding(nn.Module):
-    """
-    BERT uses learned embeddings, not sinusodial embeddings
-    """
-
-    def __init__(self, d_model, max_len=512):
-        super().__init__()
-        self.pos_embedding = nn.Embedding(max_len, d_model)
-
-    def forward(self, x):
-        positions = torch.arange(0, x.size(1), device=x.device).unsqueeze(0)
-        return self.pos_embedding(positions)
-
-
-def scaled_dot_product(query, key, value, mask=None):
-    # b, l, d * b, d, l -> b, l, l
-    # attention between seq. len
-    # i.e between every word
-    score = torch.matmul(query, key.transpose(-1, -2))
-    score = score / math.sqrt(query.size(-1))  # dim
-
-    if mask is not None:
-        score = score.masked_fill(mask == 0, float("-inf"))
-
-    weights = torch.softmax(score, dim=-1)
-    return weights @ value
-
-
-class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model, num_heads):
-        super().__init__()
-        assert d_model % num_heads == 0
-        self.num_heads = num_heads
-        self.d_k = d_model // num_heads
-
-        self.w_q = nn.Parameter(torch.randn(d_model, d_model))
-        self.w_k = nn.Parameter(torch.randn(d_model, d_model))
-        self.w_v = nn.Parameter(torch.randn(d_model, d_model))
-        self.w_o = nn.Parameter(torch.randn(d_model, d_model))
-
-    def forward(self, q, k, v, mask=None):
-        batch_size, seq_length, dim = q.size()
-
-        def transform(x, w):
-            # x -> b, l, d
-            # w -> d, d
-            # out - > b, d, d
-            x = x @ w
-            # num_head * d_k = d_model
-            x = x.view(batch_size, seq_length, self.num_heads, self.d_k)
-            # out -> [batch_size, num_heads, seq_length, d_k]
-            return x.transpose(1, 2)
-
-        q = transform(q, self.w_q)
-        k = transform(k, self.w_k)
-        v = transform(v, self.w_v)
-
-        out = scaled_dot_product(q, k, v, mask)
-        out = out.transpose(1, 2).contiguous().view(
-            batch_size, seq_length, dim)
-        return out @ self.w_o
-
-
 class EncoderLayer(nn.Module):
     def __init__(self, d_model, num_heads, d_ff):
         super().__init__()
@@ -83,13 +22,15 @@ class EncoderLayer(nn.Module):
         self.ff = FeedForward(d_model, d_ff)
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
+        self.dropout1 = nn.Dropout(0.1)
+        self.dropout2 = nn.Dropout(0.1)
 
     def forward(self, x, mask=None):
-        # attention - [query, key, value]
-        # residual connections
-        x = x + self.attention(self.norm1(x),
-                               self.norm2(x), self.norm1(x), mask)
-        x = x + self.ff(self.norm2(x))
+        attn_out = self.attention(self.norm1(x), mask)
+        x = x + self.dropout1(attn_out)
+
+        ff_out = self.ff(self.norm2(x))
+        x = x + self.dropout2(ff_out)
         return x
 
 
@@ -104,7 +45,7 @@ class EncoderBlock(nn.Module):
     ):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, d_model)
-        self.pos = PositionalEncoding(d_model)
+        self.pos = PositionalEncoding(d_model=d_model, method="learned")
         self.layers = nn.ModuleList(
             [EncoderLayer(d_model, num_heads, d_ff) for _ in range(num_layers)]
         )
@@ -127,16 +68,23 @@ class BERT(nn.Module):
         num_heads,
         d_ff,
         max_len=512,
+        dropout=0.1,
     ):
+        super().__init__()
+        self.d_model = d_model
+
         self.token_embedding = nn.Embedding(vocab_size, d_model)
-        self.position_embedding = PositionalEncoding(d_model, max_len)
-        self.segment_embedding = nn.Embedding(2, d_model)
+        self.position_embedding = nn.Embedding(max_len, d_model)
+        self.segment_embedding = nn.Embedding(
+            2, d_model
+        )  # 0 for sentence A, 1 for sentence B
+
+        self.dropout = nn.Dropout(dropout)
+        self.layer_norm = nn.LayerNorm(d_model)
 
         self.encoder_layers = nn.ModuleList(
             [EncoderLayer(d_model, num_heads, d_ff) for _ in range(num_layers)]
         )
-
-        self.norm = nn.LayerNorm(d_model)
 
         self.mlm_head = nn.Sequential(
             nn.Linear(d_model, d_model),
@@ -144,12 +92,50 @@ class BERT(nn.Module):
             nn.LayerNorm(d_model),
             nn.Linear(d_model, vocab_size),
         )
+        # TODO add nsp
 
-    def forward(self, input_ids, token_type_ids=None, attention_mask=None):
+    def forward(
+        self,
+        input_ids,
+        token_type_ids=None,
+        attention_mask=None,
+    ):
+        batch_size, seq_len = input_ids.size()
+        device = input_ids.device
+
         if token_type_ids is None:
-            pass
+            token_type_ids = torch.zeros_like(input_ids)
 
-        pass
+        position_ids = torch.arange(seq_len, dtype=torch.long, device=device)
+        position_ids = position_ids.unsqueeze(0).expand(batch_size, -1)
+
+        token_embeddings = self.token_embedding(input_ids)
+        position_embeddings = self.position_embedding(position_ids)
+        segment_embeddings = self.segment_embedding(token_type_ids)
+
+        # combine embeddings
+        embeddings = token_embeddings + position_embeddings + segment_embeddings
+        embeddings = self.layer_norm(embeddings)
+        embeddings = self.dropout(embeddings)
+
+        if attention_mask is not None:
+            extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+            extended_attention_mask = extended_attention_mask.expand(
+                batch_size, 1, seq_len, seq_len
+            ).float()
+            # invert the mask: 1.0 for positions we want to attend, 0.0 for masked positions
+            extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+        else:
+            extended_attention_mask = None
+
+        hidden_states = embeddings
+
+        for layer in self.encoder_layers:
+            hidden_states = layer(hidden_states, extended_attention_mask)
+
+        sequence_output = hidden_states
+
+        return sequence_output
 
 
 if __name__ == "__main__":
