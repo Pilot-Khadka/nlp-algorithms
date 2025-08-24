@@ -4,11 +4,82 @@ import torch.nn as nn
 
 
 class AdditiveAttention(nn.Module):
-    def __init__(self):
+    """
+    additive attention doesn’t directly compare query/key vectors like dot-product attention
+    it projects them into some shared space, squashes them with a nonlinearity
+    then reduces to a scalar score
+    """
+
+    def __init__(self, d_model, d_ff):
         super().__init__()
+        self.W_q = nn.Linear(d_model, d_ff, bias=False)
+        self.W_k = nn.Linear(d_model, d_ff, bias=False)
+        self.v = nn.Linear(d_ff, 1, bias=False)
 
     def forward(self, Q, K, V, mask=None):
-        pass
+        # Q: [batch_size, decoder_len, model_dim]
+        # K, V: [batch_size, encoder_len, model_dim]
+
+        # for pair-wise combination between every decoder position and encoder position
+        # eg:
+        # Q.unsqueeze(2) -> [1, 2, 1, 3]
+        # K.unsqueeze(1) ->  [1, 1, 4, 3]
+        # result: [1, 2, 4, 3] through broadcasting
+
+        q_proj = self.W_q(Q).unsqueeze(2)
+        k_proj = self.W_k(K).unsqueeze(1)
+        energy = self.v(torch.tanh(q_proj + k_proj)).squeeze(-1)
+
+        if mask is not None:
+            energy.masked_fill_(mask.unsqueeze(1) == 0, float("-inf"))
+
+        attn_weights = torch.softmax(energy, dim=-1)
+        context = torch.matmul(attn_weights, V)  # [batch, dec_len, d_model]
+
+        return context, attn_weights
+
+
+class MultiHeadCrossAttention(nn.Module):
+    def __init__(self, d_model, num_heads):
+        super().__init__()
+        assert d_model % num_heads == 0
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
+
+        # Q comes from the decoder so it has its own weight matrix
+        self.w_q = nn.Parameter(torch.randn(d_model, d_model))
+        # K and V come from the encoder
+        self.w_kv = nn.Parameter(torch.randn(d_model, 2 * d_model))
+        self.w_o = nn.Parameter(torch.randn(d_model, d_model))
+
+    def forward(self, decoder_out, encoder_out, mask=None):
+        batch_size, dec_seq_length, dim = decoder_out.size()
+        enc_seq_length = encoder_out.size(1)
+
+        q = decoder_out @ self.w_q
+        kv = encoder_out @ self.w_kv
+        k, v = torch.chunk(kv, 2, dim=-1)
+
+        def reshape_and_transpose(tensor, seq_length):
+            return tensor.view(
+                batch_size, seq_length, self.num_heads, self.d_k
+            ).transpose(1, 2)
+
+        q = reshape_and_transpose(q, dec_seq_length)
+        k = reshape_and_transpose(k, enc_seq_length)
+        v = reshape_and_transpose(v, enc_seq_length)
+
+        scaled_dot_product = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
+
+        if mask is not None:
+            # mask should have shape (batch_size, 1, 1, enc_seq_length)
+            scaled_dot_product.masked_fill_(mask == 0, float("-inf"))
+
+        attention_weights = torch.softmax(scaled_dot_product, dim=-1)
+        out = torch.matmul(attention_weights, v)
+
+        out = out.transpose(1, 2).contiguous().view(batch_size, dec_seq_length, dim)
+        return out @ self.w_o
 
 
 def scaled_dot_product(query, key, value, mask=None):

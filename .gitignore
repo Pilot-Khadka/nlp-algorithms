@@ -4,6 +4,8 @@ tests/
 .pre-commit-config.yaml
 .env
 track_progress.txt
+test.py
+
 
 
 # Byte-compiled / optimized / DLL files

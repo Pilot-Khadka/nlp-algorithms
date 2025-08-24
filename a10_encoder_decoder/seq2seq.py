@@ -1,20 +1,9 @@
-import os
 import torch
 import torch.nn as nn
-from layernorm import LayerNorm
-from positional_encoding import PositionalEncoding
-from utils.utils import import_function_from_folder
 
-BASE_DIR = os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__))
-)  # ~/nlp-algorithms
-ATTN_DIR = os.path.join(BASE_DIR, "09.attention")
-
-MultiHeadAttention = import_function_from_folder(
-    folder_path=ATTN_DIR,
-    module_filename="attention.py",
-    function_name="MultiHeadAttention",
-)
+from common.layernorm import LayerNorm
+from common.positional_encoding import PositionalEncoding
+from a09_attention.attention import MultiHeadAttention, MultiHeadCrossAttention
 
 
 class FeedForward(nn.Module):
@@ -31,7 +20,7 @@ class DecoderLayer(nn.Module):
     def __init__(self, d_model, num_heads, d_ff):
         super().__init__()
         self.attention = MultiHeadAttention(d_model, num_heads)
-        self.cross_attention = MultiHeadAttention(d_model, num_heads)
+        self.cross_attention = MultiHeadCrossAttention(d_model, num_heads)
 
         self.ff = FeedForward(d_model, d_ff)
         self.norm1 = LayerNorm(d_model)
@@ -39,18 +28,19 @@ class DecoderLayer(nn.Module):
         self.norm3 = LayerNorm(d_model)
 
     def forward(self, x, encoder_out, source_mask=None, target_mask=None):
-        # query, key, value
-        # residual connections
-        x = x + self.attention(self.norm1(x), self.norm1(x),
-                               self.norm1(x), target_mask)
+        # self-attention block with residual connection
+        attention_out = self.attention(self.norm1(x), target_mask)
+        x = x + attention_out
 
-        # cross-attention uses key from encoder
-        x = x + self.cross_attention(
-            self.norm2(x), self.norm2(encoder_out), self.norm2(
-                encoder_out), source_mask
+        # corss-attention block with residual connection
+        cross_attention_out = self.cross_attention(
+            self.norm2(x), self.norm2(encoder_out), source_mask
         )
+        x = x + cross_attention_out
 
-        x = x + self.ff(self.norm3(x))
+        # feed-forward block with residual connection
+        ff_out = self.ff(self.norm3(x))
+        x = x + ff_out
         return x
 
 
@@ -87,11 +77,13 @@ class EncoderLayer(nn.Module):
         self.norm2 = LayerNorm(d_model)
 
     def forward(self, x, mask=None):
-        # attention - [query, key, value]
-        # residual connections
-        x = x + self.attention(self.norm1(x),
-                               self.norm2(x), self.norm1(x), mask)
-        x = x + self.ff(self.norm2(x))
+        normalized_x = self.norm1(x)
+        attention_out = self.attention(normalized_x, mask)
+        x = x + attention_out
+
+        normalized_x = self.norm2(x)
+        ff_out = self.ff(normalized_x)
+        x = x + ff_out
         return x
 
 
@@ -131,10 +123,8 @@ class Seq2Seq(nn.Module):
         d_ff=2048,
     ):
         super().__init__()
-        self.encoder = EncoderBlock(
-            source_vocab, d_model, num_layers, num_heads, d_ff)
-        self.decoder = DecoderBlock(
-            target_vocab, d_model, num_layers, num_heads, d_ff)
+        self.encoder = EncoderBlock(source_vocab, d_model, num_layers, num_heads, d_ff)
+        self.decoder = DecoderBlock(target_vocab, d_model, num_layers, num_heads, d_ff)
 
     def forward(self, source, target, source_mask=None, target_mask=None):
         encoder_out = self.encoder(source, source_mask)
