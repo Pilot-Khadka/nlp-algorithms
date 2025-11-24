@@ -1,5 +1,5 @@
 defaults:
-  - model: rnn
-  - task: language_modeling
-  - dataset: ptb
+  - model: placeholder_model
+  - task: placeholder_task
+  - dataset: placeholder_dataset
   - training: default

@@ -16,9 +16,7 @@ class GRU(BaseModel):
 
         # fused layer for reset and update gates
         self.w_rz = nn.Linear(input_size, 2 * hidden_dim)
-
         self.w_h = nn.Linear(input_size, hidden_dim)
-
         self.fc = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, x, hidden=None):
@@ -37,9 +35,7 @@ class GRU(BaseModel):
         for t in range(seq_len):
             x_t = x[:, t, :]
             combined_input = torch.cat([x_t, h_t], dim=1)
-
             rz_combined = self.w_rz(combined_input)
-
             r_t, z_t = rz_combined.chunk(2, dim=1)
 
             r_t = torch.sigmoid(r_t)
@@ -47,13 +43,9 @@ class GRU(BaseModel):
 
             # reset gate applied to previous hidden state
             h_reset = r_t * h_t
-
             candidate_input = torch.cat([x_t, h_reset], dim=1)
-
             h_t_candidate = torch.tanh(self.w_h(candidate_input))
-
             h_t = (1.0 - z_t) * h_t_candidate + z_t * h_t
-
             outputs.append(h_t.unsqueeze(1))
 
         out = torch.cat(outputs, dim=1)
@@ -74,7 +66,6 @@ class GRUNaive(BaseModel):
         self.update_gate = nn.Linear(input_size, hidden_dim)
         self.candidate_hidden_gate = nn.Linear(input_size, hidden_dim)
         self.hidden_state = nn.Linear(hidden_dim, hidden_dim)
-
         self.fc = nn.Linear(hidden_dim, output_dim)
 
         # activation fns

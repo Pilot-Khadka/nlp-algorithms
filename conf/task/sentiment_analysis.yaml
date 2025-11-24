@@ -1,1 +1,20 @@
 name: sentiment_analysis
+description: "A classification task for determining text polarity."
+
+metrics:
+  - accuracy
+  - f1_score
+  - precision
+  - recall
+
+compatible_models:
+  - lstm
+  - fused_lstm
+  - gru
+  - rnn
+  - seq2seq
+  - bi_lstm
+  - bi_rnn
+
+compatible_datasets:
+  - imdb

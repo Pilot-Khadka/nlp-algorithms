@@ -9,7 +9,6 @@ class BaseModel(nn.Module):
         raise NotImplementedError
 
     def init_hidden(self, batch_size, device) -> Any:
-        # override for models that need hidden states
         return None
 
 

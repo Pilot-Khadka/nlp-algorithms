@@ -1,2 +1,16 @@
 name: language_modeling
+description: "A generative task for predicting the next word."
 
+metrics:
+  - perplexity
+  - loss  #cross entropy
+
+compatible_models:
+  - lstm
+  - fused_lstm
+  - gru
+  - rnn
+  - transformer_decoder
+
+compatible_datasets:
+  - ptb

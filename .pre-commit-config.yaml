@@ -1,7 +1,18 @@
 repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.5.0
-    hooks:
-      - id: check-added-large-files
-        args: ['--maxkb=100000']  # 100MB
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v6.0.0
+  hooks:
+    - id: trailing-whitespace
+    - id: check-added-large-files
+    - id: check-docstring-first
+    - id: check-json
+    - id: check-toml
+    - id: check-yaml
 
+- repo: https://github.com/pre-commit/mirrors-mypy
+  rev: v1.18.2
+  hooks:
+    - id: mypy
+      additional_dependencies:
+        - types-requests
+        - types-tqdm

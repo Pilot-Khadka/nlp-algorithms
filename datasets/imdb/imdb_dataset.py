@@ -10,8 +10,8 @@ class IMDBDataset(BaseNLPDataset):
     def __init__(
         self, cfg: Dict[str, Any], split: str, vocab: Optional[Dict[str, int]] = None
     ):
-        self.dataset_url = cfg.dataset["url"]
-        self.archive_name = cfg.dataset["archive_name"]
+        self.dataset_url = cfg["dataset"]["url"]
+        self.archive_name = cfg["dataset"]["archive_name"]
         self.extract_name = self.archive_name.split(".")[0].replace("_v1", "")
         super().__init__(cfg, split, vocab)
 

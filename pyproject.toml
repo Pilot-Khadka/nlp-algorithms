@@ -15,6 +15,11 @@ dependencies = [
 [project.scripts]
 nlp-algorithms = "nlp_algorithms:main"
 
+[tool.pdm.build]
+includes = [
+    "a01_lemmatization",
+    "data",
+]
 
 [build-system]
 requires = ["pdm-backend"]
