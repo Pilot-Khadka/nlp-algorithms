@@ -1,6 +1,6 @@
-from datasets.imdb.imdb_dataset import get_imdb_dataloaders
-from datasets.penn_treebank.penn_treebank import get_ptb_dataloaders
-from datasets.sst2.sst2 import get_sst2_dataloaders
+from datasets.imdb import get_imdb_dataloaders
+from datasets.penn_treebank import get_ptb_dataloaders
+from datasets.sst2 import get_sst2_dataloaders
 
 
 def load_dataset(cfg):

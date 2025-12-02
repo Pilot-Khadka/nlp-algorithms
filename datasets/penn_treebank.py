@@ -1,12 +1,12 @@
 import os
 import torch
 import requests
-from collections import Counter
-from torch.utils.data import Dataset, DataLoader
-from datasets.base import DatasetBundle
 from tqdm import tqdm
 from typing import Dict
+from collections import Counter
+from torch.utils.data import Dataset, DataLoader
 
+from datasets.base import DatasetBundle
 from models.model_registry import load_vocab
 
 
@@ -19,7 +19,7 @@ class PTBDataset(Dataset):
 
         if not os.path.exists(self.data_dir):
             self.urls = {
-                split_name: cfg[f"{split_name}_url"]
+                split_name: cfg["dataset"][f"{split_name}_url"]
                 for split_name in ["train", "valid", "test"]
             }
             print("File not found, downloading the dataset")

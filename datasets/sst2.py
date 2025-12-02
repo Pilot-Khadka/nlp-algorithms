@@ -13,19 +13,28 @@ class SST2Dataset(BaseNLPDataset):
     def _download_and_extract(self):
         import zipfile
 
-        DatasetUtils.ensure_dir(self.data_dir)
-        file_path = os.path.join(self.data_dir, "SST-2.zip")
+        zip_name = "SST-2.zip"
+        temp_zip = zip_name + ".tmp"
 
-        if not os.path.exists(file_path):
+        try:
             print("Downloading SST-2 dataset...")
-            DatasetUtils.download_file(self.cfg["url"], file_path)
+            DatasetUtils.download_file(self.cfg["dataset"]["url"], temp_zip)
 
-        print("Extracting SST-2 dataset...")
-        with zipfile.ZipFile(file_path, "r") as zip_ref:
-            zip_ref.extractall(self.data_dir)
-        os.remove(file_path)
+            DatasetUtils.ensure_dir(self.data_dir)
+            final_zip = os.path.join(self.data_dir, zip_name)
+            os.rename(temp_zip, final_zip)
 
-        self._organize_files()
+            print("Extracting SST-2 dataset...")
+            with zipfile.ZipFile(final_zip, "r") as zip_ref:
+                zip_ref.extractall(self.data_dir)
+
+            os.remove(final_zip)
+            self._organize_files()
+
+        except (KeyboardInterrupt, Exception):
+            if os.path.exists(temp_zip):
+                os.remove(temp_zip)
+            raise
 
     def _organize_files(self):
         files_found = [
@@ -81,8 +90,7 @@ class SST2Dataset(BaseNLPDataset):
     def load_raw_data(self) -> Tuple[List[str], List[int]]:
         """Load SST2 data from tree format."""
         possible_files = (
-            ["dev.txt", "valid.txt"] if self.split == "valid" else [
-                f"{self.split}.txt"]
+            ["dev.txt", "valid.txt"] if self.split == "valid" else [f"{self.split}.txt"]
         )
 
         file_path = None
@@ -167,8 +175,7 @@ class SST2Dataset(BaseNLPDataset):
             if len(tokens) > self.seq_len - 1:  # -1 for EOS token
                 tokens = tokens[: self.seq_len - 1]
 
-            indices = [self.vocab.get(token, self.vocab["<unk>"])
-                       for token in tokens]
+            indices = [self.vocab.get(token, self.vocab["<unk>"]) for token in tokens]
             indices.append(self.vocab["<eos>"])
 
             while len(indices) < self.seq_len:

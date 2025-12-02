@@ -71,6 +71,7 @@ class LSTM(BaseModel):
         return self.fc(out) if self.fc else out
 
 
+@register_model("naive_lstm")
 class LSTMNaive(BaseModel):
     def __init__(
         self,

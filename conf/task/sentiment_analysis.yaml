@@ -9,7 +9,7 @@ metrics:
 
 compatible_models:
   - lstm
-  - fused_lstm
+  - naive_lstm
   - gru
   - rnn
   - seq2seq
@@ -18,3 +18,4 @@ compatible_models:
 
 compatible_datasets:
   - imdb
+  - sst2
