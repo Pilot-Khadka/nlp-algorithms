@@ -7,7 +7,7 @@ from engine.registry import register_model
 __register_model__ = True
 
 
-@register_model("bidirectional_rnn")
+@register_model("bi_rnn")
 class BidirectionalRNN(BaseModel):
     def __init__(
         self,

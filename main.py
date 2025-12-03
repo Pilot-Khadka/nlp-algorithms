@@ -5,11 +5,11 @@ import torch
 import questionary
 from omegaconf import DictConfig, OmegaConf
 
-from engine.task_factory import load_task
-from engine.model_factory import ModelFactory
-from datasets.loader import load_dataset
 from engine.trainer import train
 from utils.logger import setup_logging
+from datasets.loader import load_dataset
+from engine.task_factory import load_task
+from engine.model_factory import ModelFactory
 
 
 def get_available_choices(config_path):

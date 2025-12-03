@@ -1,5 +1,4 @@
-
-name: bi_lstm 
+name: bi_lstm
 use_pretrained_embedding: True
 embedding_dim: 100
 hidden_dim: 256

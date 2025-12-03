@@ -16,3 +16,5 @@ repos:
       additional_dependencies:
         - types-requests
         - types-tqdm
+        - types-PyYAML
+

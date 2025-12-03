@@ -180,15 +180,10 @@ class MultiHeadAttentionNaive(nn.Module):
 
 if __name__ == "__main__":
     model_dim = 512
-
     batch_size = 8
-    sequence_length = 10  # number of tokens
+    sequence_length = 10
 
-    # [b, l, D]
-    query = torch.randn(batch_size, sequence_length, model_dim)
-    key = torch.randn(batch_size, sequence_length, model_dim)
-    value = torch.randn(batch_size, sequence_length, model_dim)
-    attention1 = scaled_dot_product(query, key, value)
+    x = torch.randn(batch_size, sequence_length, model_dim)
 
     attention = MultiHeadAttention(d_model=model_dim, num_heads=8)
-    attention.forward(query, key, value)
+    out = attention(x)

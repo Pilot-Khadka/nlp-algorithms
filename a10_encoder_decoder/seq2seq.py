@@ -1,9 +1,12 @@
 import torch
 import torch.nn as nn
 
+from engine.registry import register_model
 from common.layernorm import LayerNorm
 from common.positional_encoding import PositionalEncoding
 from a09_attention.attention import MultiHeadAttention, MultiHeadCrossAttention
+
+__register_model__ = True
 
 
 class FeedForward(nn.Module):
@@ -112,6 +115,7 @@ class EncoderBlock(nn.Module):
         return x
 
 
+@register_model("seq2seq")
 class Seq2Seq(nn.Module):
     def __init__(
         self,

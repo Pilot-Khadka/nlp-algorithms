@@ -1,5 +1,4 @@
 name: sst2
-batch_size: 32
-seq_len: 100
+sequence_length: 100
 data_dir: datasets/dataset_sst2
 url: https://nlp.stanford.edu/sentiment/trainDevTestTrees_PTB.zip
