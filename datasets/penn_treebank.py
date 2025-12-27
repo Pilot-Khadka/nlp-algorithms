@@ -39,6 +39,9 @@ class PTBDataset(Dataset):
 
         self.encoded = [self.vocab.get(t, self.vocab["<unk>"]) for t in tokens]
 
+        # for testing, limit the encoded to 5000
+        # self.encoded = self.encoded[:5000]
+
     def load_tokens(self, split):
         file_path = os.path.join(self.data_dir, f"{split}.txt")
         with open(file_path, "r", encoding="utf-8") as f:

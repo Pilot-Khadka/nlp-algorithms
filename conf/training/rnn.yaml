@@ -1,4 +1,4 @@
 optimizer: adam
 learning_rate: 0.001
-batch_size: 128
+batch_size: 512
 epochs: 40

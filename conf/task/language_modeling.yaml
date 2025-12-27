@@ -3,7 +3,6 @@ description: "A generative task for predicting the next word."
 
 metrics:
   - perplexity
-  - loss  #cross entropy
 
 compatible_models:
   - lstm
