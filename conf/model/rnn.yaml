@@ -1,10 +1,7 @@
 name: rnn
-embedding_dim: 100
-hidden_dim: 256
+embedding_dim: 64
+hidden_dim: 128
 num_layers: 2
-dropout: 0.2
+dropout: 0.0
 bidirectional: false
-use_pretrained_embedding: true 
-embedding_path: ./models/word2vec/word2vec_final.pt
-vocab_path: ./models/word2vec/vocab.pkl
-  
+

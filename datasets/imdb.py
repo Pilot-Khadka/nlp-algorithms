@@ -101,7 +101,7 @@ class IMDBDataset(BaseNLPDataset):
 
 
 def get_imdb_dataloaders(cfg):
-    batch_size = cfg.dataset.batch_size
+    batch_size = cfg.training.batch_size
     train_dataset = IMDBDataset(cfg, split="train")
     vocab = train_dataset.get_vocab()
     test_dataset = IMDBDataset(cfg, split="test", vocab=vocab)

@@ -189,7 +189,7 @@ class SST2Dataset(BaseNLPDataset):
 
 
 def get_sst2_dataloaders(cfg):
-    batch_size = cfg.dataset.batch_size
+    batch_size = cfg.training.batch_size
 
     train_dataset = SST2Dataset(cfg, "train", vocab=None)
     final_vocab = train_dataset.get_vocab()

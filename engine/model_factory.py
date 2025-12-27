@@ -1,6 +1,8 @@
 import torch.nn as nn
 from typing import Any
 from engine.registry import MODEL_REGISTRY
+
+
 from models.model_registry import load_model_from_name
 
 
@@ -49,12 +51,14 @@ class ModelFactory:
         vocab_size = len(vocab)
         embedding_dim = cfg_model.embedding_dim
 
-        if cfg_model.use_pretrained_embedding:
+        use_pretrained = getattr(cfg_model, "use_pretrained_embedding", False)
+
+        if use_pretrained:
             return self._create_pretrained_embeddings(
                 cfg_model, vocab, vocab_size, embedding_dim
             )
-        else:
-            return self._create_random_embeddings(vocab_size, embedding_dim)
+
+        return self._create_random_embeddings(vocab_size, embedding_dim)
 
     def _create_pretrained_embeddings(
         self, cfg_model, vocab, vocab_size: int, embedding_dim: int

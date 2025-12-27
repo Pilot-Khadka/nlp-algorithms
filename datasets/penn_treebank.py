@@ -13,7 +13,7 @@ from models.model_registry import load_vocab
 class PTBDataset(Dataset):
     def __init__(self, cfg, split, vocab=None):
         self.data_dir = cfg.dataset["data_dir"]
-        self.seq_len = cfg.dataset["seq_len"]
+        self.seq_len = cfg.dataset["sequence_length"]
         self.split = split
         self.use_pretrained_embedding = cfg.model.get("use_pretrained_embedding", False)
 
@@ -22,25 +22,29 @@ class PTBDataset(Dataset):
                 split_name: cfg["dataset"][f"{split_name}_url"]
                 for split_name in ["train", "valid", "test"]
             }
-            print("File not found, downloading the dataset")
             self.download_ptb()
 
-        self.encoded = self.load_data(split, vocab)
-        if vocab is None and split == "train":
+        tokens = self.load_tokens(split)
+
+        if vocab is None:
+            if split != "train":
+                raise ValueError("Vocabulary must be built from the train split")
             if self.use_pretrained_embedding:
                 pretrained_vocab = load_vocab(cfg.model.get("vocab_path"))
-                self.vocab = self._ensure_special_tokens(pretrained_vocab)
+                self.vocab = self._add_special_tokens(pretrained_vocab)
             else:
-                self.vocab = self.build_vocab(self.sentences)
-            print(f"Built vocabulary with {len(self.vocab)} tokens")
-        elif vocab is not None:
-            self.vocab = vocab
+                self.vocab = self.build_vocab(tokens)
         else:
-            raise ValueError(
-                "Vocabulary must be provided for non-train splits or build from train split first"
-            )
+            self.vocab = vocab
 
-    def _ensure_special_tokens(self, pretrained_vocab: Dict) -> Dict[str, int]:
+        self.encoded = [self.vocab.get(t, self.vocab["<unk>"]) for t in tokens]
+
+    def load_tokens(self, split):
+        file_path = os.path.join(self.data_dir, f"{split}.txt")
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read().replace("\n", "<eos>").split()
+
+    def _add_special_tokens(self, pretrained_vocab: Dict) -> Dict[str, int]:
         special_tokens = ["<pad>", "<unk>", "<eos>"]
 
         word2idx = pretrained_vocab["word2idx"].copy()
@@ -137,7 +141,7 @@ class PTBDataset(Dataset):
 
 
 def get_ptb_dataloaders(cfg):
-    batch_size = cfg.dataset.batch_size
+    batch_size = cfg.training.batch_size
 
     train_dataset = PTBDataset(cfg, split="train")
     vocab = train_dataset.get_vocab()
