@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, List
 
 
 import torch
@@ -31,7 +31,7 @@ class BaseTask(ABC):
         batch: Any,
         model: nn.Module,
         device: torch.device,
-        metrics: Dict[str, Any],
+        metrics: List[str],
     ) -> Tuple[float, Dict[str, float]]:
         pass
 

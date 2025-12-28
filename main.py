@@ -1,77 +1,184 @@
-import sys
+import os
 import hydra
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
 from omegaconf import DictConfig, OmegaConf
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
 
-
-from engine.trainer import train
+from engine.trainer import Trainer
 from utils.logger import setup_logging
-from datasets.loader import load_dataset
+from datasets.loader import ensure_dataset_exists, load_dataset
 from engine.task_factory import load_task
 from engine.model_factory import ModelFactory
-from utils.setup_config import setup_configuration
 
 
-@hydra.main(config_path="conf", config_name="config", version_base=None)
-def main(cfg: DictConfig):
-    # in_notebook = "ipykernel" in sys.modules or not sys.stdin.isatty()
-    in_notebook = True
+def ddp_setup(rank: int, world_size: int):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12355"
+    torch.cuda.set_device(rank)
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
 
-    if in_notebook:
-        cfg_resolved = cfg
-        print("Running in notebook mode - using provided config")
-    else:
-        config_result = setup_configuration()
-        if config_result is None:
-            return
-        task_name, model_name, dataset_name = config_result
 
-        cli_overrides = [
-            f"task={task_name}",
-            f"model={model_name}",
-            f"dataset={dataset_name}",
-            f"training={model_name}",
-        ]
-        cfg_resolved = hydra.compose(config_name="config", overrides=cli_overrides)
+def cleanup():
+    dist.destroy_process_group()
 
-    print(f"\n**Running with configuration:**\n{OmegaConf.to_yaml(cfg_resolved)}")
 
-    logger = setup_logging()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Using device: {device}")
+def prepare_dataloader(
+    original_loader: DataLoader,
+    is_distributed: bool = False,
+):
+    if is_distributed:
+        sampler = DistributedSampler(
+            original_loader.dataset,
+            num_replicas=dist.get_world_size(),
+            rank=dist.get_rank(),
+            shuffle=True,
+        )
+        return DataLoader(
+            original_loader.dataset,
+            batch_size=original_loader.batch_size,
+            sampler=sampler,
+            num_workers=original_loader.num_workers,
+            pin_memory=True,
+            collate_fn=getattr(original_loader, "collate_fn", None),
+        )
+    return original_loader
 
-    dataset_bundle = load_dataset(cfg_resolved)
-    task = load_task(cfg_resolved.task.name)
+
+def train_worker(
+    rank: int,
+    world_size: int,
+    cfg: DictConfig,
+):
+    ddp_setup(rank, world_size)
+
+    logger = setup_logging() if rank == 0 else None
+
+    if rank == 0:
+        print(f"Worker {rank}: Loading pre-downloaded dataset...")
+
+    dataset_bundle = load_dataset(cfg)
+    task = load_task(cfg.task.name)
 
     factory = ModelFactory()
-    model = factory.create_model(
-        cfg_resolved.model,
-        dataset_bundle,
-        task,
-    )
-    model.to(device)
+    model = factory.create_model(cfg.model, dataset_bundle, task).to(rank)
+    model = DDP(model, device_ids=[rank])
 
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=cfg_resolved.training.learning_rate, weight_decay=1e-4
+        model.parameters(), lr=cfg.training.learning_rate, weight_decay=1e-4
     )
 
-    metrics_to_use = cfg_resolved.task.get("metrics", [])
-    logger.info(f"Task metrics: {metrics_to_use}")
+    train_loader = prepare_dataloader(dataset_bundle.train_loader, is_distributed=True)
+    valid_loader = prepare_dataloader(dataset_bundle.valid_loader, is_distributed=True)
 
-    train_loader = dataset_bundle.train_loader
-    valid_loader = dataset_bundle.valid_loader
+    metrics_to_use = cfg.task.get("metrics", [])
 
-    train(
+    if rank == 0 and logger:
+        logger.info(f"Task metrics: {metrics_to_use}")
+
+    training_config = OmegaConf.to_container(cfg.training, resolve=True)
+
+    trainer = Trainer(
         model=model,
         task=task,
         train_loader=train_loader,
         valid_loader=valid_loader,
         optimizer=optimizer,
-        device=device,
-        logger=logger,
-        config=cfg_resolved.training,
+        config=training_config,
         metrics=metrics_to_use,
+        logger=logger,
+        gpu_id=rank,
+        use_ddp=True,
     )
+
+    try:
+        trainer.train()
+    finally:
+        cleanup()
+
+
+def train_single_gpu(cfg: DictConfig, gpu_id: int = 0):
+    logger = setup_logging()
+    device = torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Using device: {device}")
+
+    dataset_bundle = load_dataset(cfg)
+    task = load_task(cfg.task.name)
+
+    factory = ModelFactory()
+    model = factory.create_model(
+        cfg.model,
+        dataset_bundle,
+        task,
+    )
+
+    optimizer = torch.optim.Adam(
+        model.parameters(), lr=cfg.training.learning_rate, weight_decay=1e-4
+    )
+
+    metrics_to_use = cfg.task.get("metrics", [])
+    logger.info(f"Task metrics: {metrics_to_use}")
+
+    train_loader = dataset_bundle.train_loader
+    valid_loader = dataset_bundle.valid_loader
+
+    training_config = OmegaConf.to_container(cfg.training, resolve=True)
+
+    trainer = Trainer(
+        model=model,
+        task=task,
+        train_loader=train_loader,
+        valid_loader=valid_loader,
+        optimizer=optimizer,
+        config=training_config,
+        metrics=metrics_to_use,
+        logger=logger,
+        gpu_id=gpu_id,
+        use_ddp=False,
+    )
+
+    trainer.train()
+
+
+def run_training(cfg_resolved: DictConfig):
+    multi_gpu = cfg_resolved.training.get("multi_gpu", False)
+    gpu_id = cfg_resolved.get("gpu_id", 0)
+
+    if multi_gpu and torch.cuda.is_available():
+        world_size = torch.cuda.device_count()
+        if world_size > 1:
+            print(f"Starting multi-GPU training on {world_size} GPUs")
+
+            print("=" * 60)
+            print("Preparing dataset in main process before spawning workers...")
+            ensure_dataset_exists(cfg_resolved)
+            print("Dataset ready! Spawning workers...")
+            print("=" * 60)
+
+            cfg_dict = OmegaConf.to_container(cfg_resolved, resolve=True)
+
+            mp.spawn(
+                train_worker,
+                args=(world_size, cfg_dict),
+                nprocs=world_size,
+                join=True,
+            )
+            return
+        else:
+            print("Running in Single GPU / CPU mode")
+            train_single_gpu(cfg_resolved, gpu_id)
+
+    else:
+        print("Running in Single GPU / CPU mode")
+        train_single_gpu(cfg_resolved, gpu_id)
+
+
+@hydra.main(config_path="conf", config_name="config", version_base=None)
+def main(cfg: DictConfig):
+    run_training(cfg)
 
 
 if __name__ == "__main__":
