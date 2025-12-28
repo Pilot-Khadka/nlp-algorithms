@@ -1,23 +1,36 @@
+from typing import Union, Optional, Dict, Any
+
+
 import os
 import sys
 import importlib.util
+from pathlib import Path
 
 import torch
 import torch.nn as nn
 
 
-def save_model(model, embedding, optimizer, epoch, loss, filepath, **model_kwargs):
+def save_checkpoint(
+    checkpoint_path: Union[str, Path],
+    epoch: int,
+    lr: float,
+    optimizer: torch.optim.Optimizer,
+    model: nn.Module,
+    metric_value: float,
+    additional_info: Optional[Dict[str, Any]] = None,
+) -> None:
     checkpoint = {
         "epoch": epoch,
-        "model_state_dict": model.state_dict(),
-        "embedding_state_dict": embedding.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "loss": loss,
-        "model_kwargs": model_kwargs,
-        "vocab_size": model_kwargs.get("output_dim"),
+        "lr": lr,
+        "optimizer": optimizer.state_dict(),
+        "model": model.state_dict(),
+        "metric_value": metric_value,
     }
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    torch.save(checkpoint, filepath)
+
+    if additional_info:
+        checkpoint.update(additional_info)
+
+    torch.save(checkpoint, checkpoint_path)
 
 
 def load_model(filepath, model_class, embedding_class=nn.Embedding, device="cpu"):
@@ -45,30 +58,3 @@ def load_model(filepath, model_class, embedding_class=nn.Embedding, device="cpu"
         "loss": checkpoint["loss"],
         "model_kwargs": checkpoint["model_kwargs"],
     }
-
-
-def import_function_from_folder(
-    folder_path: str, module_filename: str, function_name: str
-):
-    """
-    Because the folders are named starting from number and a .
-    normal import would not work
-    """
-    module_path = os.path.abspath(os.path.join(folder_path, module_filename))
-    module_name = f"dynamic_module_{os.path.basename(folder_path)}"
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
-    if spec is None:
-        raise ImportError(f"Cannot find module spec for {module_path}")
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    func = getattr(module, function_name, None)
-    if func is None:
-        raise AttributeError(
-            f"""
-            Function '{function_name}' not found in module '{module_filename}'
-            """
-        )
-
-    return func

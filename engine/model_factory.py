@@ -49,7 +49,7 @@ class ModelFactory:
     def _create_embeddings(self, dataset_bundle, cfg_model) -> nn.Embedding:
         vocab = dataset_bundle.vocab
         vocab_size = len(vocab)
-        embedding_dim = cfg_model.embedding_dim
+        embedding_dim = cfg_model.input_dim
 
         use_pretrained = getattr(cfg_model, "use_pretrained_embedding", False)
 
@@ -125,10 +125,17 @@ class ModelFactory:
             k: v
             for k, v in cfg_model.items()
             if k
-            not in ("name", "use_pretrained_embedding", "embedding_path", "vocab_path")
+            not in (
+                "name",
+                "use_pretrained_embedding",
+                "embedding_path",
+                "vocab_path",
+                "input_dim",
+            )
         }
 
         core_model = CoreModelClass(
+            input_dim=cfg_model.input_dim,
             output_dim=output_dim,
             embedding_layer=embedding_layer,
             **model_kwargs,

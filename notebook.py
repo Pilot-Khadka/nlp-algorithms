@@ -6,9 +6,9 @@ with initialize(config_path="conf", version_base=None):
         config_name="config",
         overrides=[
             "task=language_modeling",
-            "model=rnn",
+            "model=lstm",
             "dataset=ptb",
-            "training=rnn",
+            "training=lstm",
         ],
     )
     main(cfg)
