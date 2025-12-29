@@ -1,16 +1,15 @@
 import torch
 import torch.nn as nn
-from engine.model_factory import BaseModel
+
 from engine.registry import register_model
+from engine.model_factory import BaseModel
 
-__register_model__ = True
 
-
-@register_model("bi_lstm")
+@register_model("lstm", "bidirectional")
 class BiLSTM(BaseModel):
     def __init__(
         self,
-        embedding_dim,
+        input_dim,
         hidden_dim,
         output_dim,
         **kwargs,
@@ -18,7 +17,7 @@ class BiLSTM(BaseModel):
         super().__init__()
         self.hidden_dim = hidden_dim
 
-        input_size = embedding_dim + hidden_dim
+        input_size = input_dim + hidden_dim
         self.embedding = kwargs.get("embedding_layer", None)
 
         self.forget_gate_f = nn.Linear(input_size, hidden_dim)

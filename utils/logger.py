@@ -9,12 +9,10 @@ def setup_logging(log_dir="logs"):
 
     # prevent adding handlers multiple times
     if not logger.handlers:
-        formatter = logging.Formatter(
-            "%(asctime)s - %(levelname)s - %(message)s")
+        formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
         # decide where logs go
-        file_handler = logging.FileHandler(
-            os.path.join(log_dir, "training.log"))
+        file_handler = logging.FileHandler(os.path.join(log_dir, "training.log"))
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 

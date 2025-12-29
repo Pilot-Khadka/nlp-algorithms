@@ -1,5 +1,0 @@
-optimizer: adam
-learning_rate: 0.001
-batch_size: 512
-epochs: 40
-multi_gpu: true

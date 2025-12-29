@@ -6,7 +6,6 @@ metrics:
 
 compatible_models:
   - lstm
-  - naive_lstm
   - gru
   - rnn
   - transformer_decoder

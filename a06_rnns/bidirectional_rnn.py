@@ -1,13 +1,12 @@
 import torch
 import torch.nn as nn
 
-from engine.model_factory import BaseModel
+
 from engine.registry import register_model
+from engine.model_factory import BaseModel
 
-__register_model__ = True
 
-
-@register_model("bi_rnn")
+@register_model("rnn", "bi-directional")
 class BidirectionalRNN(BaseModel):
     def __init__(
         self,

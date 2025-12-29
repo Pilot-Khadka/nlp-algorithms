@@ -1,0 +1,6 @@
+defaults:
+  - tasks: language_modeling
+  - datasets: ptb
+  - models: rnn
+  - train: default
+

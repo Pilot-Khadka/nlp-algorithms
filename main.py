@@ -1,5 +1,4 @@
 import os
-import hydra
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -61,25 +60,25 @@ def train_worker(
         print(f"Worker {rank}: Loading pre-downloaded dataset...")
 
     dataset_bundle = load_dataset(cfg)
-    task = load_task(cfg.task.name)
+    task = load_task(cfg.tasks.name)
 
     factory = ModelFactory()
-    model = factory.create_model(cfg.model, dataset_bundle, task).to(rank)
+    model = factory.create_model(cfg.models, dataset_bundle, task).to(rank)
     model = DDP(model, device_ids=[rank])
 
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=cfg.training.learning_rate, weight_decay=1e-4
+        model.parameters(), lr=cfg.train.learning_rate, weight_decay=1e-4
     )
 
     train_loader = prepare_dataloader(dataset_bundle.train_loader, is_distributed=True)
     valid_loader = prepare_dataloader(dataset_bundle.valid_loader, is_distributed=True)
 
-    metrics_to_use = cfg.task.get("metrics", [])
+    metrics_to_use = cfg.tasks.get("metrics", [])
 
     if rank == 0 and logger:
         logger.info(f"Task metrics: {metrics_to_use}")
 
-    training_config = OmegaConf.to_container(cfg.training, resolve=True)
+    training_config = OmegaConf.to_container(cfg.train, resolve=True)
 
     trainer = Trainer(
         model=model,
@@ -106,26 +105,26 @@ def train_single_gpu(cfg: DictConfig, gpu_id: int = 0):
     logger.info(f"Using device: {device}")
 
     dataset_bundle = load_dataset(cfg)
-    task = load_task(cfg.task.name)
+    task = load_task(cfg.tasks.name)
 
     factory = ModelFactory()
     model = factory.create_model(
-        cfg.model,
+        cfg.models,
         dataset_bundle,
         task,
     )
 
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=cfg.training.learning_rate, weight_decay=1e-4
+        model.parameters(), lr=cfg.train.learning_rate, weight_decay=1e-4
     )
 
-    metrics_to_use = cfg.task.get("metrics", [])
+    metrics_to_use = cfg.tasks.get("metrics", [])
     logger.info(f"Task metrics: {metrics_to_use}")
 
     train_loader = dataset_bundle.train_loader
     valid_loader = dataset_bundle.valid_loader
 
-    training_config = OmegaConf.to_container(cfg.training, resolve=True)
+    training_config = OmegaConf.to_container(cfg.train, resolve=True)
 
     trainer = Trainer(
         model=model,
@@ -144,7 +143,7 @@ def train_single_gpu(cfg: DictConfig, gpu_id: int = 0):
 
 
 def run_training(cfg_resolved: DictConfig):
-    multi_gpu = cfg_resolved.training.get("multi_gpu", False)
+    multi_gpu = cfg_resolved.train.get("multi_gpu", False)
     gpu_id = cfg_resolved.get("gpu_id", 0)
 
     if multi_gpu and torch.cuda.is_available():
@@ -176,8 +175,38 @@ def run_training(cfg_resolved: DictConfig):
         train_single_gpu(cfg_resolved, gpu_id)
 
 
-@hydra.main(config_path="conf", config_name="config", version_base=None)
-def main(cfg: DictConfig):
+def load_config():
+    cfg = OmegaConf.load("config/config.yaml")
+
+    # experiment selection
+    experiment_name = cfg.defaults[0]["experiment"]
+    experiment_cfg = OmegaConf.load(
+        os.path.join("config", "experiments", f"{experiment_name}.yaml")
+    )
+
+    composed = [cfg]
+
+    # resolve experiment defaults
+    for entry in experiment_cfg.get("defaults", []):
+        for group, name in entry.items():
+            path = os.path.join("config", group, f"{name}.yaml")
+            sub_cfg = OmegaConf.load(path)
+
+            # wrap under group key (critical step)
+            grouped_cfg = OmegaConf.create({group: sub_cfg})
+            composed.append(grouped_cfg)
+
+    # merge while preserving hierarchy
+    full_cfg = OmegaConf.merge(*composed)
+
+    # optional cleanup
+    full_cfg.pop("defaults", None)
+    return full_cfg
+
+
+def main():
+    cfg = load_config()
+    print(OmegaConf.to_yaml(cfg))
     run_training(cfg)
 
 

@@ -1,6 +1,0 @@
-defaults:
-  - model: placeholder_model
-  - task: placeholder_task
-  - dataset: placeholder_dataset
-  - training: default
-

@@ -3,5 +3,5 @@ input_dim: 64
 hidden_dim: 128
 num_layers: 2
 dropout: 0.0
-bidirectional: false
+bidirectional: true
 

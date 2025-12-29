@@ -2,3 +2,4 @@ name: lstm
 input_dim: 64
 hidden_dim: 128
 num_layers: 2
+bidirectional: true

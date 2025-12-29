@@ -1,15 +1,11 @@
-from typing import List
-
-
 import torch
 import torch.nn as nn
 
-
 from engine.registry import register_model
+
 
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.deterministic = False
-__register_model__ = True
 
 
 @register_model("rnn")
@@ -127,7 +123,7 @@ if __name__ == "__main__":
     class BaseModel(nn.Module):
         pass
 
-    def register_model(name):
+    def register_model(name, *flag):
         def decorator(cls):
             return cls
 

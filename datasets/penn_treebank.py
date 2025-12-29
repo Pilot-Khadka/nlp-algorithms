@@ -12,10 +12,12 @@ from models.model_registry import load_vocab
 
 class PTBDataset(Dataset):
     def __init__(self, cfg, split, vocab=None):
-        self.data_dir = cfg.dataset["data_dir"]
-        self.seq_len = cfg.dataset["sequence_length"]
+        self.data_dir = cfg.datasets["data_dir"]
+        self.seq_len = cfg.datasets["sequence_length"]
         self.split = split
-        self.use_pretrained_embedding = cfg.model.get("use_pretrained_embedding", False)
+        self.use_pretrained_embedding = cfg.models.get(
+            "use_pretrained_embedding", False
+        )
 
         if not os.path.exists(self.data_dir):
             self.urls = {
@@ -142,9 +144,12 @@ class PTBDataset(Dataset):
         )
         return x, y  # next-token prediction
 
+    def __repr__(self) -> str:
+        return super().__repr__()
+
 
 def get_ptb_dataloaders(cfg):
-    batch_size = cfg.training.batch_size
+    batch_size = cfg.train.batch_size
 
     train_dataset = PTBDataset(cfg, split="train")
     vocab = train_dataset.get_vocab()

@@ -1,6 +1,8 @@
 name: sentiment_analysis
 description: "A classification task for determining text polarity."
 
+loss: cross_entropy
+
 metrics:
   - accuracy
   - f1_score

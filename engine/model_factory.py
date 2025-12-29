@@ -25,7 +25,12 @@ class ModelFactory:
         task_name = cfg_task.name
         model_type = cfg_model.name
 
-        self._check_model_compatibility(task_name, model_type)
+        active_flags = set()
+        if getattr(cfg_model, "bidirectional", False):
+            active_flags.add("bidirectional")
+
+        self._check_model_compatibility(task_name, active_flags)
+
         embedding_layer = self._create_embeddings(dataset_bundle, cfg_model)
         output_dim = self._get_output_dim(cfg_task, cfg_model, dataset_bundle)
 
@@ -35,15 +40,14 @@ class ModelFactory:
 
         return core_model
 
-    def _check_model_compatibility(self, task_name: str, model_type: str) -> None:
+    def _check_model_compatibility(self, task_name: str, active_flags: set) -> None:
         if task_name in self.INCOMPATIBLE_COMBINATIONS:
             incompatible_keywords = self.INCOMPATIBLE_COMBINATIONS[task_name]
             for keyword in incompatible_keywords:
-                if keyword.lower() in model_type.lower():
+                if keyword.lower() in active_flags:
                     raise ValueError(
-                        f"Model '{model_type}' with '{keyword}' cannot be used "
-                        f"with task '{task_name}'. Bidirectional models are not "
-                        f"suitable for language modeling tasks."
+                        f"Model with flag '{keyword}' cannot be used "
+                        f"with task '{task_name}'."
                     )
 
     def _create_embeddings(self, dataset_bundle, cfg_model) -> nn.Embedding:
@@ -109,6 +113,26 @@ class ModelFactory:
                 f"Cannot determine output dimension for task '{cfg_task.name}'"
             )
 
+    def _select_model_class(self, model_type, cfg_model):
+        variants = self.model_registry[model_type]
+
+        active_flags = set()
+        if getattr(cfg_model, "bidirectional", False):
+            active_flags.add("bidirectional")
+
+        key = frozenset(active_flags)
+        if key in variants:
+            return variants[key]
+
+        base_key = frozenset()
+        if base_key in variants:
+            return variants[base_key]
+
+        raise ValueError(
+            f"No compatible variant found for model '{model_type}' "
+            f"with flags {active_flags}"
+        )
+
     def _create_core_model(
         self, model_type: str, cfg_model, embedding_layer: nn.Embedding, output_dim: int
     ) -> BaseModel:
@@ -119,7 +143,7 @@ class ModelFactory:
                 f"Available models: {available_models}"
             )
 
-        CoreModelClass = self.model_registry[model_type]
+        CoreModelClass = self._select_model_class(model_type, cfg_model)
 
         model_kwargs = {
             k: v

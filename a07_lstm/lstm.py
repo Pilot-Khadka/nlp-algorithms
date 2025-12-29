@@ -3,12 +3,13 @@ from typing import List, Tuple
 
 import torch
 import torch.nn as nn
-from engine.model_factory import BaseModel
+
+
 from engine.registry import register_model
+from engine.model_factory import BaseModel
 
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.deterministic = False
-__register_model__ = True
 
 
 @register_model("lstm")
@@ -140,7 +141,6 @@ class LSTM(BaseModel):
         return self.fc(lstm_out)
 
 
-@register_model("naive_lstm")
 class LSTMNaive(BaseModel):
     def __init__(
         self,
