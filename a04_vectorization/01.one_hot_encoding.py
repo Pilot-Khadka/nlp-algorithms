@@ -42,7 +42,7 @@ def one_hot_encode_sentence(text, word_to_idx):
     return one_hot
 
 
-def display_encoding(text, encoded_vectors, word_to_idx):
+def display_encoding(text, encoded_vectors):
     words = text.lower().split()
 
     print(f"Text: '{text}'")
@@ -52,9 +52,10 @@ def display_encoding(text, encoded_vectors, word_to_idx):
     for i, (word, vector) in enumerate(zip(words, encoded_vectors)):
         active_idx = vector.index(1) if 1 in vector else -1
         print(
-            f"  Word '{word}' -> Index {active_idx} -> {vector[:10]}{
-                '...' if len(vector) > 10 else ''
-            }"
+            f"""
+                Word '{word}' -> Index {active_idx} -> {vector[:10]}{
+                "..." if len(vector) > 10 else ""
+            }"""
         )
 
 
@@ -78,14 +79,10 @@ if __name__ == "__main__":
     print(f"Length of unique words: {len(vocab)}")
     print(f"Vocabulary (first 10): {sorted(list(vocab))[:10]}")
 
-    print("\n" + "=" * 60)
-    print("ONE-HOT ENCODING EXAMPLES")
-    print("=" * 60)
-
     for i, text in enumerate(all_texts, 1):
         print(f"\nDocument {i}:")
         encoded = one_hot_encode(text, word_to_idx)
-        display_encoding(text, encoded, word_to_idx)
+        display_encoding(text, encoded)
 
         sentence_encoding = one_hot_encode_sentence(text, word_to_idx)
         active_words = [
@@ -93,7 +90,7 @@ if __name__ == "__main__":
         ]
         print(f"  Sentence encoding: {len(active_words)} unique words active")
         print(
-            f"  Active words: {sorted(active_words)[:10]}{
-                '...' if len(active_words) > 10 else ''
-            }"
+            f"""  Active words: {sorted(active_words)[:10]}{
+                "..." if len(active_words) > 10 else ""
+            }"""
         )

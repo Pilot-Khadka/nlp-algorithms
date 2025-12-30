@@ -2,7 +2,7 @@ import math
 from collections import defaultdict
 
 
-class tfidf:
+class TFIDF:
     def __init__(self):
         self.tf = []
         self.idf = {}
@@ -46,7 +46,7 @@ if __name__ == "__main__":
         "cats and dogs are pets",
     ]
 
-    tfidf_model = tfidf()
+    tfidf_model = TFIDF()
     result = tfidf_model.fit_transform(documents)
 
     print("Input documents:")

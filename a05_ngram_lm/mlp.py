@@ -10,7 +10,6 @@ Each word in the training data is transformed into a compact feature vector base
 
 import torch
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
 import random
 from pathlib import Path
 from typing import Tuple, List
@@ -35,12 +34,10 @@ class CharacterLevelMLP:
         self._init_parameters()
 
     def _init_parameters(self):
-        self.C = torch.randn((self.vocab_size, self.n_embed),
-                             generator=self.generator)
+        self.C = torch.randn((self.vocab_size, self.n_embed), generator=self.generator)
 
         input_size = self.block_size * self.n_embed
-        self.W1 = torch.randn((input_size, self.n_hidden),
-                              generator=self.generator)
+        self.W1 = torch.randn((input_size, self.n_hidden), generator=self.generator)
         self.b1 = torch.randn(self.n_hidden, generator=self.generator)
 
         self.W2 = torch.randn(
@@ -137,8 +134,7 @@ class LanguageModelTrainer:
             loss = self.model.calculate_loss(X_train[ix], Y_train[ix])
 
             if i % 10000 == 0:
-                print(f"Iteration {
-                      i:6d}/{iterations}: Loss = {loss.item():.4f}")
+                print(f"Iteration {i:6d}/{iterations}: Loss = {loss.item():.4f}")
 
             for p in self.model.parameters:
                 p.grad = None
@@ -206,7 +202,7 @@ class TextGenerator:
         self.itos = itos
         self.block_size = block_size
 
-    def generate_samples(self, num_samples: int = 20, seed: int = None) -> List[str]:
+    def generate_samples(self, num_samples: int = 20, seed: int = 0) -> List[str]:
         if seed is not None:
             g = torch.Generator().manual_seed(seed)
         else:
@@ -222,8 +218,7 @@ class TextGenerator:
                 with torch.no_grad():
                     logits = self.model.forward(torch.tensor([context]))
                     probs = F.softmax(logits, dim=1)
-                    ix = torch.multinomial(
-                        probs, num_samples=1, generator=g).item()
+                    ix = torch.multinomial(probs, num_samples=1, generator=g).item()
 
                 context = context[1:] + [ix]
                 out.append(ix)
@@ -240,6 +235,8 @@ class TextGenerator:
 def visualize_embeddings(
     C: torch.Tensor, itos: dict, figsize: Tuple[int, int] = (8, 8)
 ):
+    import matplotlib.pyplot as plt
+
     plt.figure(figsize=figsize)
     plt.scatter(C[:, 0].data, C[:, 1].data, s=200)
     for i in range(C.shape[0]):
@@ -258,6 +255,8 @@ def visualize_embeddings(
 
 
 def main():
+    import matplotlib.pyplot as plt
+
     random.seed(0)
     torch.manual_seed(0)
 
@@ -285,8 +284,7 @@ def main():
 
     trainer = LanguageModelTrainer(model)
     print("\nFinding optimal learning rate...")
-    lri, lossi, stepi = trainer.find_learning_rate(
-        X_train, Y_train, iterations=1000)
+    lri, lossi, stepi = trainer.find_learning_rate(X_train, Y_train, iterations=1000)
 
     plt.figure(figsize=(10, 6))
     plt.plot(lri, lossi)

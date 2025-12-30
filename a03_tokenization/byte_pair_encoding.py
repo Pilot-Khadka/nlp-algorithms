@@ -18,8 +18,7 @@ class BPE:
             new_token_idx = current_vocab_size
             self.merges[most_common_pair] = new_token_idx
             self.vocab[new_token_idx] = (
-                self.vocab[most_common_pair[0]] +
-                self.vocab[most_common_pair[1]]
+                self.vocab[most_common_pair[0]] + self.vocab[most_common_pair[1]]
             )
             tokens = merge(tokens, most_common_pair, new_token_idx)
             current_vocab_size += 1
@@ -86,5 +85,4 @@ if __name__ == "__main__":
     print(f"\nLearned {len(bpe.merges)} merges:")
     for i, (pair, idx) in enumerate(list(bpe.merges.items())[:5]):
         pair_bytes = bpe.vocab[pair[0]] + bpe.vocab[pair[1]]
-        print(
-            f"  {pair} -> {idx} ('{pair_bytes.decode('utf-8', errors='replace')}')")
+        print(f"  {pair} -> {idx} ('{pair_bytes.decode('utf-8', errors='replace')}')")

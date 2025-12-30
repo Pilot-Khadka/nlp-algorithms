@@ -1,5 +1,6 @@
 name: lstm
-input_dim: 64
-hidden_dim: 128
-num_layers: 2
-bidirectional: true
+input_dim: 1150
+hidden_dim: 1150
+num_layers: 3
+dropconnect_prob: 0.5
+bidirectional: false

@@ -47,6 +47,11 @@ class LSTM(BaseModel):
             self.b_hh.append(nn.Parameter(torch.empty(4 * hidden_dim)))
 
         self.fc = nn.Linear(hidden_dim, output_dim)
+
+        if self.input_dim == self.hidden_dim and self.embedding is not None:
+            self.fc.weight = self.embedding.weight
+            print("Weight Tying Enabled")
+
         self._reset_parameters()
 
         self._use_compile = use_compile
