@@ -21,7 +21,7 @@ class PTBDataset(Dataset):
 
         if not os.path.exists(self.data_dir):
             self.urls = {
-                split_name: cfg["dataset"][f"{split_name}_url"]
+                split_name: cfg["datasets"][f"{split_name}_url"]
                 for split_name in ["train", "valid", "test"]
             }
             self.download_ptb()

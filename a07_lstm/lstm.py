@@ -26,25 +26,25 @@ class LSTM(BaseModel):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
-
         self.embedding = kwargs.get("embedding_layer", None)
+
         if self.embedding is not None:
             self.embedding.weight.requires_grad = False
             self.input_dim = self.embedding.embedding_dim
         else:
             self.input_dim = input_dim
 
-        self.w_ih = nn.ParameterList()
-        self.w_hh = nn.ParameterList()
-        self.b_ih = nn.ParameterList()
-        self.b_hh = nn.ParameterList()
+        H = hidden_dim
+
+        self.w_ih = nn.ParameterList()  # input-to-hidden
+        self.w_hh = nn.ParameterList()  # hidden-to-hidden
+        self.bias = nn.ParameterList()
 
         for layer in range(num_layers):
-            input_size = self.input_dim if layer == 0 else hidden_dim
-            self.w_ih.append(nn.Parameter(torch.empty(4 * hidden_dim, input_size)))
-            self.w_hh.append(nn.Parameter(torch.empty(4 * hidden_dim, hidden_dim)))
-            self.b_ih.append(nn.Parameter(torch.empty(4 * hidden_dim)))
-            self.b_hh.append(nn.Parameter(torch.empty(4 * hidden_dim)))
+            layer_input = self.input_dim if layer == 0 else H
+            self.w_ih.append(nn.Parameter(torch.empty(layer_input, 4 * H)))
+            self.w_hh.append(nn.Parameter(torch.empty(H, 4 * H)))
+            self.bias.append(nn.Parameter(torch.zeros(4 * H)))
 
         self.fc = nn.Linear(hidden_dim, output_dim)
 
@@ -52,52 +52,60 @@ class LSTM(BaseModel):
             self.fc.weight = self.embedding.weight
             print("Weight Tying Enabled")
 
-        self._reset_parameters()
-
         self._use_compile = use_compile
         self._compiled = False
 
-    def _reset_parameters(self):
-        stdv = 1.0 / (self.hidden_dim**0.5)
-        for p in self.parameters():
-            nn.init.uniform_(p, -stdv, stdv)
-
     def _lstm_forward_impl(
-        self, x: torch.Tensor, hidden: torch.Tensor, cell: torch.Tensor
+        self,
+        x: torch.Tensor,
+        h_list: list[torch.Tensor],
+        c_list: list[torch.Tensor],
     ) -> torch.Tensor:
         batch_size, seq_len, _ = x.size()
+        H = self.hidden_dim
+        L = self.num_layers
 
-        outputs = torch.empty(
-            batch_size, seq_len, self.hidden_dim, device=x.device, dtype=x.dtype
-        )
+        h = list(h_list)
+        c = list(c_list)
 
-        h_layers = list(hidden.unbind(0))
-        c_layers = list(cell.unbind(0))
+        outputs = torch.empty(batch_size, seq_len, H, device=x.device, dtype=x.dtype)
+
+        x_proj_0 = x @ self.w_ih[0]  # [batch, seq_len, 4*H]
+
+        w_hh_0 = self.w_hh[0]
+        bias_0 = self.bias[0]
+
+        w_ih_layers = [self.w_ih[l] for l in range(1, L)]
+        w_hh_layers = [self.w_hh[l] for l in range(1, L)]
+        bias_layers = [self.bias[l] for l in range(1, L)]
 
         for t in range(seq_len):
-            x_t = x[:, t, :]
+            gates = x_proj_0[:, t, :] + h[0] @ w_hh_0 + bias_0
+            ifo = torch.sigmoid(gates[:, : 3 * H])
+            g = torch.tanh(gates[:, 3 * H :])
+            i, f, o = ifo.chunk(3, dim=1)
 
-            for layer in range(self.num_layers):
-                h_t = h_layers[layer]
-                c_t = c_layers[layer]
+            c[0] = f * c[0] + i * g
+            h[0] = o * torch.tanh(c[0])
 
-                gates = torch.addmm(
-                    self.b_ih[layer], x_t, self.w_ih[layer].t()
-                ) + torch.addmm(self.b_hh[layer], h_t, self.w_hh[layer].t())
+            x_t = h[0]
 
-                i_t, f_t, g_t, o_t = gates.chunk(4, dim=1)
+            # remaining layers
+            for layer_idx in range(L - 1):
+                gates = (
+                    x_t @ w_ih_layers[layer_idx]
+                    + h[layer_idx + 1] @ w_hh_layers[layer_idx]
+                    + bias_layers[layer_idx]
+                )
 
-                i_t = torch.sigmoid(i_t)
-                f_t = torch.sigmoid(f_t)
-                g_t = torch.tanh(g_t)
-                o_t = torch.sigmoid(o_t)
+                ifo = torch.sigmoid(gates[:, : 3 * H])
+                g = torch.tanh(gates[:, 3 * H :])
+                i, f, o = ifo.chunk(3, dim=1)
 
-                c_t = f_t * c_t + i_t * g_t
-                h_t = o_t * torch.tanh(c_t)
+                c[layer_idx + 1] = f * c[layer_idx + 1] + i * g
+                h[layer_idx + 1] = o * torch.tanh(c[layer_idx + 1])
 
-                h_layers[layer] = h_t
-                c_layers[layer] = c_t
-                x_t = h_t
+                x_t = h[layer_idx + 1]
 
             outputs[:, t, :] = x_t
 
@@ -120,29 +128,27 @@ class LSTM(BaseModel):
             x = x.float()
 
         batch_size = x.size(0)
+        device = x.device
+        dtype = x.dtype
 
         if hidden is None:
-            hidden = torch.zeros(
-                self.num_layers,
-                batch_size,
-                self.hidden_dim,
-                device=x.device,
-                dtype=x.dtype,
-            )
+            h_list = [
+                torch.zeros(batch_size, self.hidden_dim, device=device, dtype=dtype)
+                for _ in range(self.num_layers)
+            ]
+        else:
+            h_list = [hidden[l] for l in range(self.num_layers)]
+
         if cell is None:
-            cell = torch.zeros(
-                self.num_layers,
-                batch_size,
-                self.hidden_dim,
-                device=x.device,
-                dtype=x.dtype,
-            )
+            c_list = [
+                torch.zeros(batch_size, self.hidden_dim, device=device, dtype=dtype)
+                for _ in range(self.num_layers)
+            ]
+        else:
+            c_list = [cell[l] for l in range(self.num_layers)]
 
-        # lazy compile on first forward pass
         self._compile()
-
-        lstm_out = self._lstm_forward_impl(x, hidden, cell)
-
+        lstm_out = self._lstm_forward_impl(x, h_list, c_list)
         return self.fc(lstm_out)
 
 

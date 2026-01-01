@@ -31,10 +31,11 @@ class LanguageModelingTask(BaseTask):
         inputs, targets = batch
         inputs, targets = inputs.to(device), targets.to(device)
         with torch.no_grad():
-            outputs = model(inputs)
-            loss = criterion(outputs.view(-1, outputs.size(-1)), targets.view(-1))
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                outputs = model(inputs)
+                loss = criterion(outputs.view(-1, outputs.size(-1)), targets.view(-1))
 
-            metrics = self.compute_metrics(outputs, targets, metrics_list)
+                metrics = self.compute_metrics(outputs, targets, metrics_list)
         return loss, metrics
 
     def compute_metrics(self, outputs, targets, metrics_list):
