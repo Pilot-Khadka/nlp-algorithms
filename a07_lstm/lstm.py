@@ -27,6 +27,11 @@ class LSTM(BaseModel):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.embedding = kwargs.get("embedding_layer", None)
+        self.dropout_prob = kwargs.get("dropout", None)
+        if self.dropout_prob is not None:
+            self.dropout = nn.Dropout(self.dropout_prob)
+        else:
+            self.dropout = None
 
         if self.embedding is not None:
             self.embedding.weight.requires_grad = False
@@ -89,6 +94,8 @@ class LSTM(BaseModel):
             h[0] = o * torch.tanh(c[0])
 
             x_t = h[0]
+            if self.dropout is not None and L > 1:
+                x_t = self.dropout(x_t)
 
             # remaining layers
             for layer_idx in range(L - 1):
@@ -106,6 +113,8 @@ class LSTM(BaseModel):
                 h[layer_idx + 1] = o * torch.tanh(c[layer_idx + 1])
 
                 x_t = h[layer_idx + 1]
+                if self.dropout is not None and layer_idx < L - 2:
+                    x_t = self.dropout(x_t)
 
             outputs[:, t, :] = x_t
 

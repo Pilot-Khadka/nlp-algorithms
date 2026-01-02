@@ -130,10 +130,6 @@ class PTBDataset(Dataset):
     def get_vocab(self):
         return self.vocab
 
-    @property
-    def vocab_size(self):
-        return len(self.vocab)
-
     def __len__(self):
         return len(self.encoded) - self.seq_len
 
@@ -143,9 +139,6 @@ class PTBDataset(Dataset):
             self.encoded[idx + 1 : idx + self.seq_len + 1], dtype=torch.long
         )
         return x, y  # next-token prediction
-
-    def __repr__(self) -> str:
-        return super().__repr__()
 
 
 def get_ptb_dataloaders(cfg):

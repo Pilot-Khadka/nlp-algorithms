@@ -8,7 +8,6 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-from omegaconf import DictConfig
 
 from tasks.base_task import BaseTask
 from utils.metrics import MetricsTracker
@@ -23,7 +22,7 @@ class Trainer:
         train_loader: DataLoader,
         valid_loader: DataLoader,
         optimizer: torch.optim.Optimizer,
-        config: DictConfig,
+        config,
         metrics: Dict[str, Any],
         logger: Any,
         gpu_id: int = 0,
@@ -44,6 +43,20 @@ class Trainer:
         self.optimizer = optimizer
         self.config = config
         self.logger = logger
+
+        if (
+            hasattr(config, "lr_decay")
+            and config.lr_decay
+            and hasattr(config, "optimizer")
+        ):
+            self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                self.optimizer,
+                mode="min",
+                factor=config.lr_decay,
+                patience=1,
+            )
+        else:
+            self.scheduler = None
 
         metric_names = list(metrics.keys()) if isinstance(metrics, dict) else metrics
         self.metrics_tracker = MetricsTracker(metric_names)
@@ -176,6 +189,9 @@ class Trainer:
         for epoch in range(self.config["epochs"]):
             avg_train_loss = self._run_train_epoch(epoch)
             avg_valid_loss, avg_metrics = self._run_valid_epoch(epoch)
+
+            if self.scheduler is not None:
+                self.scheduler.step(avg_valid_loss)
 
             if self.is_main:
                 metrics_str = ", ".join(

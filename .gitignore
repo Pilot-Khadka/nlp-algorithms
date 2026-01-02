@@ -6,6 +6,7 @@ tests/
 track_progress.txt
 test.py
 cuda_kernels/
+datasets/dataset*
 
 
 

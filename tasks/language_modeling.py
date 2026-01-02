@@ -31,7 +31,7 @@ class LanguageModelingTask(BaseTask):
         inputs, targets = batch
         inputs, targets = inputs.to(device), targets.to(device)
         with torch.no_grad():
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            with torch.autocast(device_type="cuda", dtype=torch.float16):
                 outputs = model(inputs)
                 loss = criterion(outputs.view(-1, outputs.size(-1)), targets.view(-1))
 

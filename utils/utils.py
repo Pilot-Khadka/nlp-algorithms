@@ -1,13 +1,58 @@
 from typing import Union, Optional, Dict, Any
 
-
-import os
-import sys
-import importlib.util
+import yaml
 from pathlib import Path
 
 import torch
 import torch.nn as nn
+
+
+def load_yaml(path):
+    with open(path, "r") as f:
+        return yaml.safe_load(f)
+
+
+class AttrDict(dict):
+    def __getattr__(self, key):
+        try:
+            value = self[key]
+        except KeyError:
+            raise AttributeError(key)
+        return value
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
+
+def convert_numeric(value):
+    if isinstance(value, str):
+        if value.isdigit() or (value.startswith("-") and value[1:].isdigit()):
+            return int(value)
+        try:
+            float_val = float(value)
+            return float_val
+        except ValueError:
+            return value
+    return value
+
+
+def to_attrdict(obj):
+    if isinstance(obj, dict):
+        return AttrDict({k: to_attrdict(convert_numeric(v)) for k, v in obj.items()})
+    elif isinstance(obj, list):
+        return [to_attrdict(convert_numeric(v)) for v in obj]
+    else:
+        return convert_numeric(obj)
+
+
+def load_config(path: str):
+    raw_cfg = load_yaml(path)
+    print("raw cfg:", raw_cfg)
+
+    if not isinstance(raw_cfg, dict):
+        raise ValueError("Top-level YAML must be a mapping")
+
+    return raw_cfg
 
 
 def save_checkpoint(

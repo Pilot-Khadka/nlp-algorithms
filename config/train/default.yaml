@@ -1,5 +1,5 @@
 epochs: 40
-batch_size: 512
+batch_size: 16
 multi_gpu: true
 learning_rate: 1e-4
 

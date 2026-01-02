@@ -1,8 +1,10 @@
+from typing import Dict
+
+
 import os
 import torch
 import torch.multiprocessing as mp
 import torch.distributed as dist
-from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -52,9 +54,8 @@ def prepare_dataloader(
 def train_worker(
     rank: int,
     world_size: int,
-    cfg_dict: DictConfig,
+    cfg,
 ):
-    cfg = OmegaConf.create(cfg_dict)
     ddp_setup(rank, world_size)
 
     logger = setup_logging() if rank == 0 else None
@@ -69,9 +70,18 @@ def train_worker(
     model = factory.create_model(cfg.models, dataset_bundle, task).to(rank)
     model = DDP(model, device_ids=[rank])
 
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=cfg.train.learning_rate, weight_decay=1e-4
-    )
+    if hasattr(cfg.train, "optimizer") and cfg.train.optimizer:
+        optimizer = torch.optim.SGD(
+            model.parameters(),
+            lr=cfg.train.learning_rate,
+            weight_decay=1e-4,
+        )
+    else:
+        optimizer = torch.optim.Adam(
+            model.parameters(),
+            lr=cfg.train.learning_rate,
+            weight_decay=1e-4,
+        )
 
     train_loader = prepare_dataloader(dataset_bundle.train_loader, is_distributed=True)
     valid_loader = prepare_dataloader(dataset_bundle.valid_loader, is_distributed=True)
@@ -81,7 +91,7 @@ def train_worker(
     if rank == 0 and logger:
         logger.info(f"Task metrics: {metrics_to_use}")
 
-    training_config = OmegaConf.to_container(cfg.train, resolve=True)
+    training_config = cfg.train
 
     trainer = Trainer(
         model=model,
@@ -102,7 +112,7 @@ def train_worker(
         cleanup()
 
 
-def run_training(cfg_resolved: DictConfig):
+def run_training(cfg_resolved):
     multi_gpu = cfg_resolved.train.get("multi_gpu", False)
     gpu_id = cfg_resolved.get("gpu_id", 0)
 
@@ -117,11 +127,9 @@ def run_training(cfg_resolved: DictConfig):
             print("Dataset ready! Spawning workers...")
             print("=" * 60)
 
-            cfg_dict = OmegaConf.to_container(cfg_resolved, resolve=True)
-
             mp.spawn(
                 train_worker,
-                args=(world_size, cfg_dict),
+                args=(world_size, cfg_resolved),
                 nprocs=world_size,
                 join=True,
             )
@@ -135,7 +143,7 @@ def run_training(cfg_resolved: DictConfig):
         train_single_gpu(cfg_resolved, gpu_id)
 
 
-def train_single_gpu(cfg: DictConfig, gpu_id: int = 0):
+def train_single_gpu(cfg, gpu_id: int = 0):
     logger = setup_logging()
     device = torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
@@ -160,7 +168,7 @@ def train_single_gpu(cfg: DictConfig, gpu_id: int = 0):
     train_loader = dataset_bundle.train_loader
     valid_loader = dataset_bundle.valid_loader
 
-    training_config = OmegaConf.to_container(cfg.train, resolve=True)
+    training_config = cfg.train
 
     trainer = Trainer(
         model=model,
