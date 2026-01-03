@@ -44,15 +44,16 @@ class LanguageModelingTask(BaseTask):
                 outputs.view(-1, outputs.size(-1)), targets.view(-1)
             ).item()
 
-            metrics = {"loss": loss}
-            metrics.update(self.compute_metrics(outputs, targets, metrics_list))
-        return loss, metrics
+            context = {
+                "loss": loss,
+                "outputs": outputs,
+                "targets": targets,
+            }
 
-    def compute_metrics(self, outputs, targets, metrics_list):
-        computed = {}
-        for metric_name in metrics_list:
-            if hasattr(lm_metrics, metric_name):
-                func = getattr(lm_metrics, metric_name)
-                result = func(outputs, targets, computed)
-                computed[metric_name] = result
-        return computed
+            metrics = {"loss": loss}
+            for name in metrics_list:
+                if hasattr(lm_metrics, name):
+                    func = getattr(lm_metrics, name)
+                    metrics[name] = func(context)
+
+        return loss, metrics

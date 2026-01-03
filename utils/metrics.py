@@ -69,8 +69,8 @@ class MetricsTracker:
         return averages.get(metric_name)
 
 
-def perplexity(outputs, targets, computed_metrics=None):
-    loss = computed_metrics["loss"]
+def perplexity(context):
+    loss = context["loss"]
     return float(torch.exp(torch.clamp(torch.tensor(loss), max=50)))
 
 
