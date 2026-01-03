@@ -69,16 +69,9 @@ class MetricsTracker:
         return averages.get(metric_name)
 
 
-def loss(outputs, targets):
-    return torch.nn.functional.cross_entropy(
-        outputs.view(-1, outputs.size(-1)), targets.view(-1)
-    ).item()
-
-
 def perplexity(outputs, targets, computed_metrics=None):
-    if computed_metrics and "loss" in computed_metrics:
-        return math.exp(computed_metrics["loss"])
-    return math.exp(loss(outputs, targets))
+    loss = computed_metrics["loss"]
+    return float(torch.exp(torch.clamp(torch.tensor(loss), max=50)))
 
 
 def ppl_to_loss_ratio(outputs, targets, computed_metrics=None):

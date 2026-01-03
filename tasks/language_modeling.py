@@ -7,11 +7,15 @@ import utils.metrics as lm_metrics
 
 
 class LanguageModelingTask(BaseTask):
+    @property
+    def name(self):
+        return "language_modeling"
+
     def get_output_dim(self, dataset_bundle):
         return dataset_bundle.vocab_size
 
-    def get_loss_fn(self):
-        return nn.CrossEntropyLoss()
+    def get_loss_fn(self, pad_idx=0):
+        return nn.CrossEntropyLoss(ignore_index=pad_idx)
 
     def train_step(self, batch, model, optimizer, device):
         criterion = self.get_loss_fn()
@@ -30,12 +34,18 @@ class LanguageModelingTask(BaseTask):
         criterion = self.get_loss_fn()
         inputs, targets = batch
         inputs, targets = inputs.to(device), targets.to(device)
-        with torch.no_grad():
-            with torch.autocast(device_type="cuda", dtype=torch.float16):
-                outputs = model(inputs)
-                loss = criterion(outputs.view(-1, outputs.size(-1)), targets.view(-1))
 
-                metrics = self.compute_metrics(outputs, targets, metrics_list)
+        with torch.no_grad():
+            outputs = model(inputs)
+
+            if torch.isnan(outputs).any() or torch.isinf(outputs).any():
+                raise ValueError("Model produced NaN or Inf logits during evaluation")
+            loss = criterion(
+                outputs.view(-1, outputs.size(-1)), targets.view(-1)
+            ).item()
+
+            metrics = {"loss": loss}
+            metrics.update(self.compute_metrics(outputs, targets, metrics_list))
         return loss, metrics
 
     def compute_metrics(self, outputs, targets, metrics_list):
@@ -46,7 +56,3 @@ class LanguageModelingTask(BaseTask):
                 result = func(outputs, targets, computed)
                 computed[metric_name] = result
         return computed
-
-    @property
-    def name(self):
-        return "language_modeling"

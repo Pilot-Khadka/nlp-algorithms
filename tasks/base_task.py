@@ -8,7 +8,7 @@ from torch import nn
 
 class BaseTask(ABC):
     @abstractmethod
-    def name(self) -> str:
+    def name(self):
         pass
 
     @abstractmethod
@@ -31,7 +31,7 @@ class BaseTask(ABC):
         batch: Any,
         model: nn.Module,
         device: torch.device,
-        metrics: List[str],
+        metrics_list: List[str],
     ) -> Tuple[float, Dict[str, float]]:
         pass
 
@@ -39,5 +39,6 @@ class BaseTask(ABC):
         self,
         outputs: torch.Tensor,
         targets: torch.Tensor,
+        metrics_list: List[str],
     ) -> Dict[str, float]:
         return {}
