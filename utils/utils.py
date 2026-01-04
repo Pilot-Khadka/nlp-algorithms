@@ -76,6 +76,7 @@ def save_checkpoint(
         checkpoint.update(additional_info)
 
     torch.save(checkpoint, checkpoint_path)
+    print("Model saved at:", checkpoint_path)
 
 
 def load_model(filepath, model_class, embedding_class=nn.Embedding, device="cpu"):

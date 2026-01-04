@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 
 import torch
@@ -12,153 +12,266 @@ torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.deterministic = False
 
 
+class LockedDropout(nn.Module):
+    def __init__(self, p: float = 0.5):
+        super().__init__()
+        self.p = p
+        self._mask: Optional[torch.Tensor] = None
+        self._cached_batch_size: Optional[int] = None
+        self._cached_feat_size: Optional[int] = None
+
+    def reset_mask(self):
+        self._mask = None
+        self._cached_batch_size = None
+        self._cached_feat_size = None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.training or self.p == 0:
+            return x
+
+        mask_shape: tuple[int, ...]  # allow 2D or 3D
+
+        if x.dim() == 3:
+            batch_size, _, feat_size = x.size()
+            mask_shape = (batch_size, 1, feat_size)  # broadcast across time
+        else:
+            batch_size, feat_size = x.size()
+            mask_shape = (batch_size, feat_size)
+
+        need_new_mask = (
+            self._mask is None
+            or self._cached_batch_size != batch_size
+            or self._cached_feat_size != feat_size
+            or self._mask.device != x.device
+        )
+
+        if need_new_mask:
+            self._mask = x.new_empty(mask_shape).bernoulli_(1 - self.p) / (1 - self.p)
+            self._cached_batch_size = batch_size
+            self._cached_feat_size = feat_size
+
+        return x * self._mask
+
+
+class WordDropout(nn.Module):
+    def __init__(self, p: float = 0.1):
+        super().__init__()
+        self.p = p
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.training or self.p == 0:
+            return x
+
+        mask = x.new_empty(x.size(0), x.size(1), 1).bernoulli_(1 - self.p)
+        return x * mask
+
+
 @register_model("lstm")
-class LSTM(BaseModel):
+class LSTM(nn.Module):
     def __init__(
         self,
-        input_dim,
-        hidden_dim,
-        output_dim,
-        num_layers=2,
-        use_compile=True,
+        input_dim: int,
+        hidden_dim: int,
+        output_dim: int,
+        num_layers: int = 2,
+        dropout: float = 0.5,
+        embed_dropout: float = 0.1,
+        recurrent_dropout: float = 0.25,
+        output_dropout: float = 0.5,
+        tie_weights: bool = True,
         **kwargs,
     ):
         super().__init__()
+        self.input_dim = input_dim
         self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
         self.num_layers = num_layers
+        self.tie_weights = tie_weights
+
         self.embedding = kwargs.get("embedding_layer", None)
-        self.dropout_prob = kwargs.get("dropout", None)
-        if self.dropout_prob is not None:
-            self.dropout = nn.Dropout(self.dropout_prob)
-        else:
-            self.dropout = None
+        if self.embedding is None:
+            self.embedding = nn.Embedding(output_dim, input_dim)
+        assert self.embedding is not None
+        self.embed_dropout = WordDropout(embed_dropout)
 
-        if self.embedding is not None:
-            self.embedding.weight.requires_grad = False
-            self.input_dim = self.embedding.embedding_dim
-        else:
-            self.input_dim = input_dim
+        # persist masks across BPTT until reset_dropout_masks() is called
+        self.layer_dropouts = nn.ModuleList(
+            [LockedDropout(dropout) for _ in range(num_layers)]
+        )
+        self.recurrent_dropouts = nn.ModuleList(
+            [LockedDropout(recurrent_dropout) for _ in range(num_layers)]
+        )
+        self.output_dropout_module = LockedDropout(output_dropout)
 
-        H = hidden_dim
+        self._build_layers()
+        self._setup_output_layers()
+        self._initialize_weights()
 
-        self.w_ih = nn.ParameterList()  # input-to-hidden
-        self.w_hh = nn.ParameterList()  # hidden-to-hidden
+    def _build_layers(self):
+        self.w_ih = nn.ParameterList()
+        self.w_hh = nn.ParameterList()
         self.bias = nn.ParameterList()
 
-        for layer in range(num_layers):
-            layer_input = self.input_dim if layer == 0 else H
-            self.w_ih.append(nn.Parameter(torch.empty(layer_input, 4 * H)))
+        for layer in range(self.num_layers):
+            input_size = self.input_dim if layer == 0 else self.hidden_dim
+            H = self.hidden_dim
+            self.w_ih.append(nn.Parameter(torch.empty(input_size, 4 * H)))
             self.w_hh.append(nn.Parameter(torch.empty(H, 4 * H)))
-            self.bias.append(nn.Parameter(torch.zeros(4 * H)))
+            self.bias.append(nn.Parameter(torch.empty(4 * H)))
 
-        self.fc = nn.Linear(hidden_dim, output_dim)
+    def _setup_output_layers(self):
+        assert self.embedding is not None
+        if self.tie_weights:
+            if self.hidden_dim == self.input_dim:
+                self.proj = None
+                self.fc = nn.Linear(self.hidden_dim, self.output_dim)
+                self.fc.weight = self.embedding.weight  # Tie weights
+                print(f"[Weight Tying] Direct: hidden_dim={self.hidden_dim}")
+            else:
+                self.proj = nn.Linear(self.hidden_dim, self.input_dim, bias=False)
+                self.fc = nn.Linear(self.input_dim, self.output_dim)
+                self.fc.weight = self.embedding.weight
+                print(
+                    f"[Weight Tying] With projection: {self.hidden_dim} -> {self.input_dim}"
+                )
+        else:
+            self.proj = None
+            self.fc = nn.Linear(self.hidden_dim, self.output_dim)
+            print("[Weight Tying] Disabled")
 
-        if self.input_dim == self.hidden_dim and self.embedding is not None:
-            self.fc.weight = self.embedding.weight
-            print("Weight Tying Enabled")
+    def _initialize_weights(self):
+        init_range = 0.1
 
-        self._use_compile = use_compile
-        self._compiled = False
+        assert self.embedding is not None
+        nn.init.uniform_(self.embedding.weight, -init_range, init_range)
 
-    def _lstm_forward_impl(
+        H = self.hidden_dim
+        for w_ih, w_hh, bias in zip(self.w_ih, self.w_hh, self.bias):
+            nn.init.uniform_(w_ih, -init_range, init_range)
+            nn.init.uniform_(w_hh, -init_range, init_range)
+            nn.init.zeros_(bias)
+            bias.data[H : 2 * H] = 1.0  # forget gate
+            bias.data[3 * H : 4 * H] = 0.0  # output gate
+
+        if self.proj is not None:
+            nn.init.uniform_(self.proj.weight, -init_range, init_range)
+
+        nn.init.zeros_(self.fc.bias)
+
+    def init_hidden(
+        self,
+        batch_size: int,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
+    ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+        if device is None:
+            device = next(self.parameters()).device
+        if dtype is None:
+            dtype = next(self.parameters()).dtype
+
+        hidden = [
+            torch.zeros(batch_size, self.hidden_dim, device=device, dtype=dtype)
+            for _ in range(self.num_layers)
+        ]
+        cell = [
+            torch.zeros(batch_size, self.hidden_dim, device=device, dtype=dtype)
+            for _ in range(self.num_layers)
+        ]
+        return hidden, cell
+
+    def detach_hidden(
+        self,
+        states: Optional[Tuple[List[torch.Tensor], List[torch.Tensor]]],
+    ) -> Optional[Tuple[List[torch.Tensor], List[torch.Tensor]]]:
+        if states is None:
+            return None
+        hidden, cell = states
+        return ([h.detach() for h in hidden], [c.detach() for c in cell])
+
+    def reset_dropout_masks(self):
+        for module in self.layer_dropouts:
+            module.reset_mask()
+        for module in self.recurrent_dropouts:
+            module.reset_mask()
+        self.output_dropout_module.reset_mask()
+
+    def _forward(
         self,
         x: torch.Tensor,
-        h_list: list[torch.Tensor],
-        c_list: list[torch.Tensor],
-    ) -> torch.Tensor:
+        hidden: List[torch.Tensor],
+        cell: List[torch.Tensor],
+    ) -> Tuple[torch.Tensor, List[torch.Tensor], List[torch.Tensor]]:
         batch_size, seq_len, _ = x.size()
         H = self.hidden_dim
         L = self.num_layers
 
-        h = list(h_list)
-        c = list(c_list)
+        h = [h_i.clone() for h_i in hidden]
+        c = [c_i.clone() for c_i in cell]
 
-        outputs = torch.empty(batch_size, seq_len, H, device=x.device, dtype=x.dtype)
+        layer_input = x
 
-        x_proj_0 = x @ self.w_ih[0]  # [batch, seq_len, 4*H]
+        for layer_idx in range(L):
+            w_ih = self.w_ih[layer_idx]
+            w_hh = self.w_hh[layer_idx]
+            bias = self.bias[layer_idx]
+            recurrent_dropout = self.recurrent_dropouts[layer_idx]
 
-        w_hh_0 = self.w_hh[0]
-        bias_0 = self.bias[0]
+            # Precompute input projection for entire sequence
+            x_proj = layer_input @ w_ih  # (batch, seq, 4*H)
 
-        w_ih_layers = [self.w_ih[l] for l in range(1, L)]
-        w_hh_layers = [self.w_hh[l] for l in range(1, L)]
-        bias_layers = [self.bias[l] for l in range(1, L)]
-
-        for t in range(seq_len):
-            gates = x_proj_0[:, t, :] + h[0] @ w_hh_0 + bias_0
-            ifo = torch.sigmoid(gates[:, : 3 * H])
-            g = torch.tanh(gates[:, 3 * H :])
-            i, f, o = ifo.chunk(3, dim=1)
-
-            c[0] = f * c[0] + i * g
-            h[0] = o * torch.tanh(c[0])
-
-            x_t = h[0]
-            if self.dropout is not None and L > 1:
-                x_t = self.dropout(x_t)
-
-            # remaining layers
-            for layer_idx in range(L - 1):
-                gates = (
-                    x_t @ w_ih_layers[layer_idx]
-                    + h[layer_idx + 1] @ w_hh_layers[layer_idx]
-                    + bias_layers[layer_idx]
-                )
-
-                ifo = torch.sigmoid(gates[:, : 3 * H])
-                g = torch.tanh(gates[:, 3 * H :])
-                i, f, o = ifo.chunk(3, dim=1)
-
-                c[layer_idx + 1] = f * c[layer_idx + 1] + i * g
-                h[layer_idx + 1] = o * torch.tanh(c[layer_idx + 1])
-
-                x_t = h[layer_idx + 1]
-                if self.dropout is not None and layer_idx < L - 2:
-                    x_t = self.dropout(x_t)
-
-            outputs[:, t, :] = x_t
-
-        return outputs
-
-    def _compile(self):
-        if self._use_compile and not self._compiled:
-            self._lstm_forward_impl = torch.compile(
-                self._lstm_forward_impl,
-                mode="reduce-overhead",
+            outputs_t = torch.empty(
+                batch_size, seq_len, H, device=x.device, dtype=x.dtype
             )
-            self._compiled = True
 
-    def forward(self, x, hidden=None, cell=None):
-        if self.embedding:
-            x = self.embedding(x)
-        else:
-            if x.dim() == 2:
-                x = x.unsqueeze(-1)
-            x = x.float()
+            for t in range(seq_len):
+                # Recurrent dropout on h before h @ w_hh
+                h_dropped = recurrent_dropout(h[layer_idx])
 
-        batch_size = x.size(0)
-        device = x.device
-        dtype = x.dtype
+                gates = x_proj[:, t, :] + h_dropped @ w_hh + bias
 
-        if hidden is None:
-            h_list = [
-                torch.zeros(batch_size, self.hidden_dim, device=device, dtype=dtype)
-                for _ in range(self.num_layers)
-            ]
-        else:
-            h_list = [hidden[l] for l in range(self.num_layers)]
+                i = torch.sigmoid(gates[:, :H])
+                f = torch.sigmoid(gates[:, H : 2 * H])
+                g = torch.tanh(gates[:, 2 * H : 3 * H])
+                o = torch.sigmoid(gates[:, 3 * H :])
 
-        if cell is None:
-            c_list = [
-                torch.zeros(batch_size, self.hidden_dim, device=device, dtype=dtype)
-                for _ in range(self.num_layers)
-            ]
-        else:
-            c_list = [cell[l] for l in range(self.num_layers)]
+                c[layer_idx] = f * c[layer_idx] + i * g
+                h[layer_idx] = o * torch.tanh(c[layer_idx])
 
-        self._compile()
-        lstm_out = self._lstm_forward_impl(x, h_list, c_list)
-        return self.fc(lstm_out)
+                outputs_t[:, t, :] = h[layer_idx]
+
+            if layer_idx < L - 1:
+                outputs_t = self.layer_dropouts[layer_idx](outputs_t)
+
+            layer_input = outputs_t
+
+        return outputs_t, h, c
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        hidden: Optional[List[torch.Tensor]] = None,
+        cell: Optional[List[torch.Tensor]] = None,
+    ) -> Tuple[torch.Tensor, Tuple[List[torch.Tensor], List[torch.Tensor]]]:
+        batch_size, seq_len = x.shape
+
+        assert self.embedding is not None
+        emb = self.embedding(x)
+        emb = self.embed_dropout(emb)
+
+        if hidden is None or cell is None:
+            hidden, cell = self.init_hidden(batch_size, x.device, emb.dtype)
+
+        if hidden[0].size(0) != batch_size:
+            hidden, cell = self.init_hidden(batch_size, x.device, emb.dtype)
+
+        lstm_out, hidden, cell = self._forward(emb, hidden, cell)
+        lstm_out = self.output_dropout_module(lstm_out)
+
+        if self.proj is not None:
+            lstm_out = self.proj(lstm_out)
+
+        output = self.fc(lstm_out)
+        return output
 
 
 class LSTMNaive(BaseModel):
@@ -216,7 +329,7 @@ if __name__ == "__main__":
     model = LSTM(input_dim=10, hidden_dim=20, output_dim=5)
     print(model)
 
-    x_dummy = torch.randn(3, 7, 10)  # (batch_size, seq_len, embedding_dim)
+    x_dummy = torch.randn(3, 7, 10)  # (batch_size, seq_len, input_dim)
     output = model(x_dummy)
     print("Output shape:", output.shape)
     print("Any NaNs in output?", torch.isnan(output).any().item())
