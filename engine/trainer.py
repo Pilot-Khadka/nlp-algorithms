@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 
 
 from pathlib import Path
@@ -11,7 +11,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from tasks.base_task import BaseTask
 from utils.metrics import MetricsTracker
-from utils.utils import save_checkpoint
+from utils.utils import save_checkpoint, load_checkpoint
 
 
 class Trainer:
@@ -27,6 +27,7 @@ class Trainer:
         logger: Any,
         gpu_id: int = 0,
         use_ddp: bool = False,
+        resume_from: Optional[Union[str, Path]] = None,
     ) -> None:
         self.gpu_id = gpu_id
         self.device = torch.device(f"cuda:{gpu_id}")
@@ -57,6 +58,19 @@ class Trainer:
             )
         else:
             self.scheduler = None
+
+        self.start_epoch = 0
+        if resume_from is not None:
+            self.logger.info(f"Loading model from checkpoint:{resume_from}")
+            start_epoch, best_valid_loss = load_checkpoint(
+                resume_from,
+                model=self.model.module if isinstance(self.model, DDP) else self.model,
+                optimizer=self.optimizer,
+                scheduler=self.scheduler,
+                device=self.device,
+            )
+            self.start_epoch = start_epoch
+            self.best_valid_loss = best_valid_loss
 
         metric_names = list(metrics.keys()) if isinstance(metrics, dict) else metrics
         self.metrics_tracker = MetricsTracker(metric_names)
@@ -164,29 +178,28 @@ class Trainer:
         if not self.is_main:
             return
 
-        current_lr = self.optimizer.param_groups[0]["lr"]
-        additional_info = {
-            "train_loss": avg_train_loss,
-            "valid_loss": avg_valid_loss,
-            **avg_metrics,
-        }
-
         unwrapped_model = (
             self.model.module if isinstance(self.model, DDP) else self.model
         )
 
+        additional_info = {
+            "train_loss": avg_train_loss,
+            "valid_loss": avg_valid_loss,
+            "metrics": avg_metrics,
+        }
+
         save_checkpoint(
             checkpoint_path=self.checkpoint_dir / checkpoint_name,
-            epoch=epoch + 1,
-            lr=current_lr,
+            epoch=epoch + 1,  # next epoch to run
             optimizer=self.optimizer,
             model=unwrapped_model,
-            metric_value=avg_valid_loss,
+            scheduler=self.scheduler,
+            best_valid_loss=self.best_valid_loss,
             additional_info=additional_info,
         )
 
     def train(self) -> None:
-        for epoch in range(self.config["epochs"]):
+        for epoch in range(self.start_epoch, self.config["epochs"]):
             avg_train_loss = self._run_train_epoch(epoch)
             avg_valid_loss, avg_metrics = self._run_valid_epoch(epoch)
 

@@ -47,7 +47,7 @@ def to_attrdict(obj):
 
 def load_config(path: str):
     raw_cfg = load_yaml(path)
-    print("raw cfg:", raw_cfg)
+    print(yaml.safe_dump(raw_cfg, sort_keys=False, default_flow_style=False))
 
     if not isinstance(raw_cfg, dict):
         raise ValueError("Top-level YAML must be a mapping")
@@ -58,22 +58,32 @@ def load_config(path: str):
 def save_checkpoint(
     checkpoint_path: Union[str, Path],
     epoch: int,
-    lr: float,
     optimizer: torch.optim.Optimizer,
     model: nn.Module,
-    metric_value: float,
+    scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+    best_valid_loss: Optional[float] = None,
     additional_info: Optional[Dict[str, Any]] = None,
 ) -> None:
     checkpoint = {
         "epoch": epoch,
-        "lr": lr,
-        "optimizer": optimizer.state_dict(),
-        "model": model.state_dict(),
-        "metric_value": metric_value,
+        "model_state": model.state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+        "best_valid_loss": best_valid_loss,
+        "rng_state": {
+            "torch": torch.get_rng_state().clone(),
+            "cuda": (
+                [s.clone() for s in torch.cuda.get_rng_state_all()]
+                if torch.cuda.is_available()
+                else None
+            ),
+        },
     }
 
-    if additional_info:
-        checkpoint.update(additional_info)
+    if scheduler is not None:
+        checkpoint["scheduler_state"] = scheduler.state_dict()
+
+    if additional_info is not None:
+        checkpoint["additional_info"] = additional_info
 
     torch.save(checkpoint, checkpoint_path)
     print("Model saved at:", checkpoint_path)
@@ -104,3 +114,34 @@ def load_model(filepath, model_class, embedding_class=nn.Embedding, device="cpu"
         "loss": checkpoint["loss"],
         "model_kwargs": checkpoint["model_kwargs"],
     }
+
+
+def load_checkpoint(
+    checkpoint_path,
+    model,
+    optimizer,
+    scheduler=None,
+    device=torch.device("cpu"),
+):
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+
+    model.load_state_dict(checkpoint["model_state"])
+    optimizer.load_state_dict(checkpoint["optimizer_state"])
+
+    if scheduler is not None and "scheduler_state" in checkpoint:
+        scheduler.load_state_dict(checkpoint["scheduler_state"])
+
+    if "rng_state" in checkpoint:
+        torch_state = checkpoint["rng_state"].get("torch")
+        if torch_state is not None:
+            torch.set_rng_state(torch_state.detach().cpu().to(torch.uint8))
+
+        cuda_state = checkpoint["rng_state"].get("cuda")
+        if torch.cuda.is_available() and cuda_state is not None:
+            torch.cuda.set_rng_state_all(
+                [s.detach().cpu().to(torch.uint8) for s in cuda_state]
+            )
+    start_epoch = checkpoint["epoch"]
+    best_valid_loss = checkpoint.get("best_valid_loss", float("inf"))
+
+    return start_epoch, best_valid_loss

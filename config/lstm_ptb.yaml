@@ -24,6 +24,8 @@ train:
   lr_decay: 0.5
   grad_clip: 0.25
   weight_decay: 1e-4
+  compile_model: false
+  # checkpoint: "checkpoints/best.pt"
 
 tasks:
   name: language_modeling

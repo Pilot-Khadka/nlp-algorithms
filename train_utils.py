@@ -79,6 +79,7 @@ def train_worker(
 
     training_config = cfg.train
 
+    checkpoint = cfg.train.get("checkpoint", None)
     trainer = Trainer(
         model=model,
         task=task,
@@ -90,6 +91,7 @@ def train_worker(
         logger=logger,
         gpu_id=rank,
         use_ddp=True,
+        resume_from=checkpoint,
     )
 
     try:
@@ -144,6 +146,10 @@ def train_single_gpu(cfg, gpu_id: int = 0):
         task,
     )
 
+    if cfg.train.compile_model:
+        logger.info("Compiling the model...")
+        model = torch.compile(model)
+
     optimizer = torch.optim.Adam(
         model.parameters(), lr=cfg.train.learning_rate, weight_decay=1e-4
     )
@@ -155,7 +161,7 @@ def train_single_gpu(cfg, gpu_id: int = 0):
     valid_loader = dataset_bundle.valid_loader
 
     training_config = cfg.train
-
+    checkpoint = cfg.train.get("checkpoint", None)
     trainer = Trainer(
         model=model,
         task=task,
@@ -167,6 +173,7 @@ def train_single_gpu(cfg, gpu_id: int = 0):
         logger=logger,
         gpu_id=gpu_id,
         use_ddp=False,
+        resume_from=checkpoint,
     )
 
     trainer.train()
