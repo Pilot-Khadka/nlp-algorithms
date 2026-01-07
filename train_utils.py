@@ -1,6 +1,3 @@
-from typing import Dict
-
-
 import os
 import torch
 import torch.multiprocessing as mp
@@ -16,6 +13,7 @@ from utils.logger import setup_logging
 
 from engine.task_factory import load_task
 from engine.model_factory import ModelFactory
+from engine.optimizer import get_optimizer
 
 
 def ddp_setup(rank: int, world_size: int):
@@ -70,19 +68,7 @@ def train_worker(
     model = factory.create_model(cfg.models, dataset_bundle, task).to(rank)
     model = DDP(model, device_ids=[rank])
 
-    if hasattr(cfg.train, "optimizer") and cfg.train.optimizer:
-        optimizer = torch.optim.SGD(
-            model.parameters(),
-            lr=cfg.train.learning_rate,
-            weight_decay=1e-4,
-        )
-    else:
-        optimizer = torch.optim.Adam(
-            model.parameters(),
-            lr=cfg.train.learning_rate,
-            weight_decay=1e-4,
-        )
-
+    optimizer = get_optimizer(model, cfg)
     train_loader = prepare_dataloader(dataset_bundle.train_loader, is_distributed=True)
     valid_loader = prepare_dataloader(dataset_bundle.valid_loader, is_distributed=True)
 

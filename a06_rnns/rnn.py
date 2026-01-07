@@ -1,3 +1,5 @@
+# TODO: smaller batch size, add gradient accumulation
+# train on single gpu, test it with compared to t14x2
 import torch
 import torch.nn as nn
 
@@ -16,7 +18,6 @@ class RNN(nn.Module):
         hidden_dim,
         output_dim,
         num_layers=2,
-        use_compile=True,
         **kwargs,
     ):
         super().__init__()
@@ -44,9 +45,6 @@ class RNN(nn.Module):
 
         self.h2o = nn.Linear(hidden_dim, output_dim)
         self._reset_parameters()
-
-        self._use_compile = use_compile
-        self._compiled = False
 
     def _reset_parameters(self):
         stdv = 1.0 / (self.hidden_dim**0.5)
@@ -81,15 +79,6 @@ class RNN(nn.Module):
 
         return outputs
 
-    def _compile(self):
-        if self._use_compile and not self._compiled:
-            self._rnn_forward_impl = torch.compile(
-                self._rnn_forward_impl,
-                mode="reduce-overhead",
-                fullgraph=False,
-            )
-            self._compiled = True
-
     def forward(self, x, hidden=None):
         if self.embedding:
             x = self.embedding(x)
@@ -110,8 +99,6 @@ class RNN(nn.Module):
                 device=x.device,
                 dtype=x.dtype,
             )
-
-        self._compile()
 
         rnn_out = self._rnn_forward_impl(x, hidden)
         outputs = self.h2o(rnn_out.view(-1, self.hidden_dim))
@@ -146,7 +133,6 @@ if __name__ == "__main__":
         hidden_dim=hidden_dim,
         output_dim=output_dim,
         num_layers=num_layers,
-        use_compile=False,
     )
     print(
         f"  Model created with {sum(p.numel() for p in model.parameters())} parameters"
@@ -210,7 +196,6 @@ if __name__ == "__main__":
         hidden_dim=test_hidden_dim,
         output_dim=test_hidden_dim,
         num_layers=1,
-        use_compile=False,
     )
 
     torch_rnn = nn.RNN(
@@ -247,7 +232,6 @@ if __name__ == "__main__":
             hidden_dim=hidden_dim,
             output_dim=output_dim,
             num_layers=n_layers,
-            use_compile=False,
         )
         x_test = torch.randn(batch_size, seq_len, input_dim)
         out_test = multi_layer_rnn(x_test)
@@ -275,7 +259,6 @@ if __name__ == "__main__":
             hidden_dim=hidden_dim,
             output_dim=output_dim,
             num_layers=num_layers,
-            use_compile=False,
         ).to(dtype)
         x_dtype = torch.randn(batch_size, seq_len, input_dim, dtype=dtype)
         out_dtype = model_dtype(x_dtype)

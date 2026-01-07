@@ -25,6 +25,10 @@ class LanguageModelingTask(BaseTask):
         optimizer.zero_grad()
         outputs = model(inputs)  # shape: [batch_size, seq_len, vocab_size]
 
+        # if the model returns (output, hidden) or (output, (h, c))
+        if isinstance(outputs, tuple):
+            outputs = outputs[0]
+
         loss = criterion(outputs.view(-1, outputs.size(-1)), targets.view(-1))
         loss.backward()
         optimizer.step()
@@ -37,6 +41,9 @@ class LanguageModelingTask(BaseTask):
 
         with torch.no_grad():
             outputs = model(inputs)
+
+            if isinstance(outputs, tuple):
+                outputs = outputs[0]
 
             if torch.isnan(outputs).any() or torch.isinf(outputs).any():
                 raise ValueError("Model produced NaN or Inf logits during evaluation")

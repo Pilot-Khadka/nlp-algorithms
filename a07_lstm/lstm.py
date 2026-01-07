@@ -271,7 +271,7 @@ class LSTM(nn.Module):
             lstm_out = self.proj(lstm_out)
 
         output = self.fc(lstm_out)
-        return output
+        return output, (hidden, cell)
 
 
 class LSTMNaive(BaseModel):
