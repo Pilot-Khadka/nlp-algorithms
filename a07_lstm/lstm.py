@@ -187,13 +187,6 @@ class LSTM(nn.Module):
         self._hidden = None
         self._cell = None
 
-    def detach_state(self) -> None:
-        """call before each forward pass for truncated BPTT."""
-        if self._hidden is not None:
-            self._hidden = [h.detach() for h in self._hidden]
-        if self._cell is not None:
-            self._cell = [c.detach() for c in self._cell]
-
     def get_state(self) -> Optional[Tuple[List[torch.Tensor], List[torch.Tensor]]]:
         """current internal state."""
         if self._hidden is None or self._cell is None:
@@ -288,7 +281,7 @@ class LSTM(nn.Module):
             # no state available, init fresh
             hidden, cell = self.init_hidden(batch_size, x.device, emb.dtype)
 
-        lstm_out, hidden, cell = self._forward(emb, hidden, cell)
+        lstm_out, new_hidden, new_cell = self._forward(emb, hidden, cell)
         lstm_out = self.output_dropout_module(lstm_out)
 
         if self.proj is not None:
@@ -297,9 +290,9 @@ class LSTM(nn.Module):
         output = self.fc(lstm_out)
 
         # store state for next forward call (stateful mode)
-        self._hidden = hidden
-        self._cell = cell
-        return output, (hidden, cell)
+        self._hidden = [h.detach() for h in new_hidden]
+        self._cell = [c.detach() for c in new_cell]
+        return output, (new_hidden, new_cell)
 
 
 class LSTMNaive(BaseModel):

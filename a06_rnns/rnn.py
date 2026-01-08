@@ -61,10 +61,6 @@ class RNN(nn.Module):
     def reset_state(self) -> None:
         self._hidden = None
 
-    def detach_state(self) -> None:
-        if self._hidden is not None:
-            self._hidden = self._hidden.detach()
-
     def get_state(self) -> Optional[torch.Tensor]:
         return self._hidden
 
@@ -147,12 +143,13 @@ class RNN(nn.Module):
             # no state available, inti fresh
             hidden = self.init_hidden(batch_size, x.device, x.dtype)
 
-        rnn_out, hidden = self._rnn_forward_impl(x, hidden)
+        rnn_out, new_hidden = self._rnn_forward_impl(x, hidden)
 
-        self._hidden = hidden
+        self._hidden = new_hidden.detach()
+
         output = self.h2o(rnn_out)
 
-        return output, hidden
+        return output, new_hidden
 
 
 if __name__ == "__main__":

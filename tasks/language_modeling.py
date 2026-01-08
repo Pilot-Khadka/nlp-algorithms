@@ -6,15 +6,6 @@ from tasks.base_task import BaseTask
 import utils.metrics as lm_metrics
 
 
-def unwrap_model(model: nn.Module) -> nn.Module:
-    from torch.nn.parallel import DistributedDataParallel as DDP
-
-    """Unwrap model from DDP/DataParallel wrapper if necessary."""
-    if isinstance(model, (DDP, nn.DataParallel)):
-        return model.module
-    return model
-
-
 class LanguageModelingTask(BaseTask):
     @property
     def name(self):
@@ -31,9 +22,8 @@ class LanguageModelingTask(BaseTask):
         called at the start of each epoch.
         rests model state for a fresh start on the data.
         """
-        base_model = unwrap_model(model)
-        if hasattr(base_model, "reset_state"):
-            base_model.reset_state()
+        if hasattr(model, "reset_state"):
+            model.reset_state()
 
     def on_epoch_end(self, model: nn.Module, training: bool = True) -> None:
         """Called at the end of each epoch. Optional cleanup."""
@@ -47,10 +37,6 @@ class LanguageModelingTask(BaseTask):
         grad_clip,
         device: torch.device,
     ):
-        base_model = unwrap_model(model)
-        if hasattr(base_model, "detach_state"):
-            base_model.detach_state()
-
         criterion = self.get_loss_fn()
         inputs, targets = batch  # shape: [batch_size, seq_len]
         inputs, targets = inputs.to(device), targets.to(device)
@@ -72,11 +58,6 @@ class LanguageModelingTask(BaseTask):
         return loss.item()
 
     def eval_step(self, batch, model, device, metrics_list):
-        base_model = unwrap_model(model)
-
-        if hasattr(base_model, "detach_state"):
-            base_model.detach_state()
-
         criterion = self.get_loss_fn()
         inputs, targets = batch
         inputs, targets = inputs.to(device), targets.to(device)
