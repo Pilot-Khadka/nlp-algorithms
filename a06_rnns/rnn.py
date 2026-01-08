@@ -1,5 +1,5 @@
-# TODO: smaller batch size, add gradient accumulation
-# train on single gpu, test it with compared to t14x2
+from typing import Optional, Tuple
+
 import torch
 import torch.nn as nn
 
@@ -23,6 +23,9 @@ class RNN(nn.Module):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
+        self.output_dim = output_dim
+
+        self._hidden: Optional[torch.Tensor] = None
 
         self.embedding = kwargs.get("embedding_layer", None)
         if self.embedding is not None:
@@ -51,7 +54,45 @@ class RNN(nn.Module):
         for p in self.parameters():
             nn.init.uniform_(p, -stdv, stdv)
 
-    def _rnn_forward_impl(self, x: torch.Tensor, hidden: torch.Tensor) -> torch.Tensor:
+    @property
+    def is_stateful(self) -> bool:
+        return True
+
+    def reset_state(self) -> None:
+        self._hidden = None
+
+    def detach_state(self) -> None:
+        if self._hidden is not None:
+            self._hidden = self._hidden.detach()
+
+    def get_state(self) -> Optional[torch.Tensor]:
+        return self._hidden
+
+    def set_state(self, state: Optional[torch.Tensor]) -> None:
+        self._hidden = state
+
+    def init_hidden(
+        self,
+        batch_size: int,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
+    ) -> torch.Tensor:
+        if device is None:
+            device = next(self.parameters()).device
+        if dtype is None:
+            dtype = next(self.parameters()).dtype
+
+        return torch.zeros(
+            self.num_layers,
+            batch_size,
+            self.hidden_dim,
+            device=device,
+            dtype=dtype,
+        )
+
+    def _rnn_forward_impl(
+        self, x: torch.Tensor, hidden: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len, _ = x.size()
 
         # pre-allocate outputs
@@ -77,7 +118,8 @@ class RNN(nn.Module):
 
             outputs[:, t, :] = x_t
 
-        return outputs
+        final_hidden = torch.stack(h_layers, dim=0)
+        return outputs, final_hidden
 
     def forward(self, x, hidden=None):
         if self.embedding:
@@ -91,18 +133,26 @@ class RNN(nn.Module):
 
         batch_size, seq_len, _ = x.size()
 
-        if hidden is None:
-            hidden = torch.zeros(
-                self.num_layers,
-                batch_size,
-                self.hidden_dim,
-                device=x.device,
-                dtype=x.dtype,
-            )
+        if hidden is not None:
+            # explicit state passed, use it directly
+            pass
+        elif self._hidden is not None:
+            # use stored internal state if batch size matches
+            if self._hidden.size(1) == batch_size:
+                hidden = self._hidden
+            else:
+                # batch size changed (e.g., last batch), reinitialize
+                hidden = self.init_hidden(batch_size, x.device, x.dtype)
+        else:
+            # no state available, inti fresh
+            hidden = self.init_hidden(batch_size, x.device, x.dtype)
 
-        rnn_out = self._rnn_forward_impl(x, hidden)
-        outputs = self.h2o(rnn_out.view(-1, self.hidden_dim))
-        return outputs.view(batch_size, seq_len, -1)
+        rnn_out, hidden = self._rnn_forward_impl(x, hidden)
+
+        self._hidden = hidden
+        output = self.h2o(rnn_out)
+
+        return output, hidden
 
 
 if __name__ == "__main__":

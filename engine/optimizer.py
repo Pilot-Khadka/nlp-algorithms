@@ -19,7 +19,7 @@ def get_optimizer(model, cfg):
             model.parameters(),
             lr=lr,
             weight_decay=wd,
-            betas=(0.9, 0.999),  # Standard defaults
+            betas=(0.9, 0.999),
             eps=1e-8,
         )
     return optimizer

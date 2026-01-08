@@ -19,11 +19,11 @@ train:
   epochs: 40
   batch_size: 32
   multi_gpu: true
-  # optimizer: sgd
-  learning_rate: 0.001
-  lr_decay: 0.5
+  optimizer: sgd
+  learning_rate: 10.0
+  lr_decay: 0.25
   grad_clip: 0.25
-  weight_decay: 1e-4
+  weight_decay: 1e-6
   compile_model: false
   # checkpoint: "checkpoints/best.pt"
 

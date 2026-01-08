@@ -76,6 +76,10 @@ class LSTM(nn.Module):
         self.num_layers = num_layers
         self.tie_weights = tie_weights
 
+        # for state management
+        self._hidden: Optional[List[torch.Tensor]] = None
+        self._cell: Optional[List[torch.Tensor]] = None
+
         self.embedding = kwargs.get("embedding_layer", None)
         if self.embedding is None:
             self.embedding = nn.Embedding(output_dim, input_dim)
@@ -173,6 +177,39 @@ class LSTM(nn.Module):
             dropout.reset_mask()
         self.output_dropout_module.reset_mask()
 
+    @property
+    def is_stateful(self) -> bool:
+        """if it can maintain state across forward calls."""
+        return True
+
+    def reset_state(self) -> None:
+        """call at the start of each epoch."""
+        self._hidden = None
+        self._cell = None
+
+    def detach_state(self) -> None:
+        """call before each forward pass for truncated BPTT."""
+        if self._hidden is not None:
+            self._hidden = [h.detach() for h in self._hidden]
+        if self._cell is not None:
+            self._cell = [c.detach() for c in self._cell]
+
+    def get_state(self) -> Optional[Tuple[List[torch.Tensor], List[torch.Tensor]]]:
+        """current internal state."""
+        if self._hidden is None or self._cell is None:
+            return None
+        return (self._hidden, self._cell)
+
+    def set_state(
+        self, state: Optional[Tuple[List[torch.Tensor], List[torch.Tensor]]]
+    ) -> None:
+        """useful for resuming or beam search"""
+        if state is None:
+            self._hidden = None
+            self._cell = None
+        else:
+            self._hidden, self._cell = state
+
     def _forward(
         self,
         x: torch.Tensor,
@@ -237,10 +274,18 @@ class LSTM(nn.Module):
         emb = self.embedding(x)
         emb = self.embed_dropout(emb)
 
-        if hidden is None or cell is None:
-            hidden, cell = self.init_hidden(batch_size, x.device, emb.dtype)
-
-        if hidden[0].size(0) != batch_size:
+        if hidden is not None and cell is not None:
+            # explicit state passed, use it directly
+            pass
+        elif self._hidden is not None and self._cell is not None:
+            # use stored internal state if batch size matches
+            if self._hidden[0].size(0) == batch_size:
+                hidden, cell = self._hidden, self._cell
+            else:
+                # batch size changed (e.g., last batch), reinitialize
+                hidden, cell = self.init_hidden(batch_size, x.device, emb.dtype)
+        else:
+            # no state available, init fresh
             hidden, cell = self.init_hidden(batch_size, x.device, emb.dtype)
 
         lstm_out, hidden, cell = self._forward(emb, hidden, cell)
@@ -250,6 +295,10 @@ class LSTM(nn.Module):
             lstm_out = self.proj(lstm_out)
 
         output = self.fc(lstm_out)
+
+        # store state for next forward call (stateful mode)
+        self._hidden = hidden
+        self._cell = cell
         return output, (hidden, cell)
 
 

@@ -1,5 +1,7 @@
+from typing import Any, Dict, Tuple, List, Optional
+
+
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Tuple, List
 
 
 import torch
@@ -21,6 +23,7 @@ class BaseTask(ABC):
         batch: Any,
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
+        grad_clip: Optional[float],
         device: torch.device,
     ) -> torch.Tensor:
         pass

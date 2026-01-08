@@ -155,9 +155,7 @@ def train_single_gpu(cfg, gpu_id: int = 0):
         print("Compiling the model ....")
         model = torch.compile(model)
 
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=cfg.train.learning_rate, weight_decay=1e-4
-    )
+    optimizer = get_optimizer(model, cfg)
 
     metrics_to_use = cfg.tasks.get("metrics", [])
     logger.info(f"Task metrics: {metrics_to_use}")

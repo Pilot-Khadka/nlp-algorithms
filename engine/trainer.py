@@ -87,6 +87,10 @@ class Trainer:
         if self.use_ddp:
             self.train_loader.sampler.set_epoch(epoch)
 
+        # reset model state at epoch start (for stateful models like LSTM)
+        if hasattr(self.task, "on_epoch_start"):
+            self.task.on_epoch_start(self.model, training=True)
+
         total_train_loss = 0
 
         if self.is_main:
@@ -99,7 +103,9 @@ class Trainer:
             train_progress = self.train_loader
 
         for batch_idx, batch in enumerate(train_progress):
-            loss = self.task.train_step(batch, self.model, self.optimizer, self.device)
+            loss = self.task.train_step(
+                batch, self.model, self.optimizer, self.config.grad_clip, self.device
+            )
             total_train_loss += loss
 
             if self.is_main and hasattr(train_progress, "set_postfix"):
@@ -109,6 +115,9 @@ class Trainer:
                         "Avg Loss": f"{total_train_loss / (batch_idx + 1):.4f}",
                     }
                 )
+
+        if hasattr(self.task, "on_epoch_end"):
+            self.task.on_epoch_end(self.model, training=True)
 
         avg_train_loss = total_train_loss / len(self.train_loader)
 
@@ -123,6 +132,10 @@ class Trainer:
         self.model.eval()
         total_valid_loss = 0.0
         self.metrics_tracker.reset()
+
+        # reset model state for validation (fresh start)
+        if hasattr(self.task, "on_epoch_start"):
+            self.task.on_epoch_start(self.model, training=False)
 
         if self.is_main:
             valid_progress = tqdm(
@@ -150,6 +163,9 @@ class Trainer:
                     }
                     postfix.update({k: f"{v:.4f}" for k, v in current_metrics.items()})
                     valid_progress.set_postfix(postfix)
+
+        if hasattr(self.task, "on_epoch_end"):
+            self.task.on_epoch_end(self.model, training=False)
 
         avg_valid_loss = total_valid_loss / len(self.valid_loader)
 
