@@ -66,6 +66,11 @@ def train_worker(
 
     factory = ModelFactory()
     model = factory.create_model(cfg.models, dataset_bundle, task).to(rank)
+
+    if cfg.get("train", {}).get("compile_model", False):
+        print("Compiling the model ....")
+        model = torch.compile(model)
+
     model = DDP(model, device_ids=[rank])
 
     optimizer = get_optimizer(model, cfg)
@@ -146,8 +151,8 @@ def train_single_gpu(cfg, gpu_id: int = 0):
         task,
     )
 
-    if cfg.train.compile_model:
-        logger.info("Compiling the model...")
+    if cfg.get("train", {}).get("compile_model", False):
+        print("Compiling the model ....")
         model = torch.compile(model)
 
     optimizer = torch.optim.Adam(

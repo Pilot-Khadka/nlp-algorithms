@@ -46,9 +46,10 @@ class Trainer:
         self.logger = logger
 
         if (
-            hasattr(config, "lr_decay")
+            hasattr(config, "optimizer")
+            and config.optimizer.lower() == "sgd"
+            and hasattr(config, "lr_decay")
             and config.lr_decay
-            and hasattr(config, "optimizer")
         ):
             self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 self.optimizer,

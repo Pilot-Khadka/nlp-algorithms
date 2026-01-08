@@ -60,7 +60,7 @@ def save_checkpoint(
     epoch: int,
     optimizer: torch.optim.Optimizer,
     model: nn.Module,
-    scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+    scheduler,
     best_valid_loss: Optional[float] = None,
     additional_info: Optional[Dict[str, Any]] = None,
 ) -> None:

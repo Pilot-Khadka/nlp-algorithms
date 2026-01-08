@@ -1,4 +1,4 @@
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union
 
 
 import torch
@@ -13,42 +13,30 @@ torch.backends.cudnn.deterministic = False
 
 
 class LockedDropout(nn.Module):
+    """Dropout with mask fixed across timesteps within a single forward pass."""
+
     def __init__(self, p: float = 0.5):
         super().__init__()
         self.p = p
         self._mask: Optional[torch.Tensor] = None
-        self._cached_batch_size: Optional[int] = None
-        self._cached_feat_size: Optional[int] = None
 
     def reset_mask(self):
         self._mask = None
-        self._cached_batch_size = None
-        self._cached_feat_size = None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if not self.training or self.p == 0:
             return x
 
-        mask_shape: tuple[int, ...]  # allow 2D or 3D
-
+        mask_shape: Union[Tuple[int, int, int], Tuple[int, int]]
         if x.dim() == 3:
             batch_size, _, feat_size = x.size()
-            mask_shape = (batch_size, 1, feat_size)  # broadcast across time
+            mask_shape = (batch_size, 1, feat_size)
         else:
             batch_size, feat_size = x.size()
             mask_shape = (batch_size, feat_size)
 
-        need_new_mask = (
-            self._mask is None
-            or self._cached_batch_size != batch_size
-            or self._cached_feat_size != feat_size
-            or self._mask.device != x.device
-        )
-
-        if need_new_mask:
+        if self._mask is None:
             self._mask = x.new_empty(mask_shape).bernoulli_(1 - self.p) / (1 - self.p)
-            self._cached_batch_size = batch_size
-            self._cached_feat_size = feat_size
 
         return x * self._mask
 
@@ -94,7 +82,6 @@ class LSTM(nn.Module):
         assert self.embedding is not None
         self.embed_dropout = WordDropout(embed_dropout)
 
-        # persist masks across BPTT until reset_dropout_masks() is called
         self.layer_dropouts = nn.ModuleList(
             [LockedDropout(dropout) for _ in range(num_layers)]
         )
@@ -125,7 +112,7 @@ class LSTM(nn.Module):
             if self.hidden_dim == self.input_dim:
                 self.proj = None
                 self.fc = nn.Linear(self.hidden_dim, self.output_dim)
-                self.fc.weight = self.embedding.weight  # Tie weights
+                self.fc.weight = self.embedding.weight
                 print(f"[Weight Tying] Direct: hidden_dim={self.hidden_dim}")
             else:
                 self.proj = nn.Linear(self.hidden_dim, self.input_dim, bias=False)
@@ -179,20 +166,11 @@ class LSTM(nn.Module):
         ]
         return hidden, cell
 
-    def detach_hidden(
-        self,
-        states: Optional[Tuple[List[torch.Tensor], List[torch.Tensor]]],
-    ) -> Optional[Tuple[List[torch.Tensor], List[torch.Tensor]]]:
-        if states is None:
-            return None
-        hidden, cell = states
-        return ([h.detach() for h in hidden], [c.detach() for c in cell])
-
-    def reset_dropout_masks(self):
-        for module in self.layer_dropouts:
-            module.reset_mask()
-        for module in self.recurrent_dropouts:
-            module.reset_mask()
+    def _reset_dropout_masks(self):
+        for dropout in self.layer_dropouts:
+            dropout.reset_mask()
+        for dropout in self.recurrent_dropouts:
+            dropout.reset_mask()
         self.output_dropout_module.reset_mask()
 
     def _forward(
@@ -216,15 +194,14 @@ class LSTM(nn.Module):
             bias = self.bias[layer_idx]
             recurrent_dropout = self.recurrent_dropouts[layer_idx]
 
-            # Precompute input projection for entire sequence
-            x_proj = layer_input @ w_ih  # (batch, seq, 4*H)
+            x_proj = layer_input @ w_ih
 
             outputs_t = torch.empty(
                 batch_size, seq_len, H, device=x.device, dtype=x.dtype
             )
 
             for t in range(seq_len):
-                # Recurrent dropout on h before h @ w_hh
+                # first call creates mask, subsequent calls reuse it
                 h_dropped = recurrent_dropout(h[layer_idx])
 
                 gates = x_proj[:, t, :] + h_dropped @ w_hh + bias
@@ -253,6 +230,8 @@ class LSTM(nn.Module):
         cell: Optional[List[torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, Tuple[List[torch.Tensor], List[torch.Tensor]]]:
         batch_size, seq_len = x.shape
+
+        self._reset_dropout_masks()
 
         assert self.embedding is not None
         emb = self.embedding(x)
