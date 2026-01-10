@@ -1,9 +1,13 @@
+from typing import Dict, Optional, List
+
+
 import os
-import torch
 import requests
+import numpy as np
 from tqdm import tqdm
-from typing import Dict
 from collections import Counter
+
+import torch
 from torch.utils.data import Dataset, DataLoader
 
 from datasets.base import DatasetBundle
@@ -11,7 +15,7 @@ from models.model_registry import load_vocab
 
 
 class PTBDataset(Dataset):
-    def __init__(self, cfg, split, vocab=None):
+    def __init__(self, cfg, split: str, vocab: Optional[Dict[str, int]] = None):
         self.data_dir = cfg.datasets["data_dir"]
         self.seq_len = cfg.datasets["sequence_length"]
         self.split = split
@@ -21,33 +25,53 @@ class PTBDataset(Dataset):
 
         if not os.path.exists(self.data_dir):
             self.urls = {
-                split_name: cfg["datasets"][f"{split_name}_url"]
+                split_name: cfg.datasets[f"{split_name}_url"]
                 for split_name in ["train", "valid", "test"]
             }
-            self.download_ptb()
+            self._download_ptb()
 
-        tokens = self.load_tokens(split)
+        tokens = self._load_tokens()
 
         if vocab is None:
             if split != "train":
                 raise ValueError("Vocabulary must be built from the train split")
+
             if self.use_pretrained_embedding:
                 pretrained_vocab = load_vocab(cfg.model.get("vocab_path"))
                 self.vocab = self._add_special_tokens(pretrained_vocab)
             else:
-                self.vocab = self.build_vocab(tokens)
+                self.vocab = self._build_vocab(tokens)
         else:
             self.vocab = vocab
 
-        self.encoded = [self.vocab.get(t, self.vocab["<unk>"]) for t in tokens]
+        self.encoded = self._encode_tokens(tokens)
 
-        # for testing, limit the encoded to 5000
-        # self.encoded = self.encoded[:5000]
-
-    def load_tokens(self, split):
-        file_path = os.path.join(self.data_dir, f"{split}.txt")
+    def _load_tokens(self) -> List[str]:
+        file_path = os.path.join(self.data_dir, f"{self.split}.txt")
         with open(file_path, "r", encoding="utf-8") as f:
-            return f.read().replace("\n", "<eos>").split()
+            return f.read().replace("\n", " <eos> ").split()
+
+    def _encode_tokens(self, tokens: List[str]) -> torch.Tensor:
+        unk_idx = self.vocab["<unk>"]
+        vocab_get = self.vocab.get
+
+        encoded = np.fromiter(
+            (vocab_get(t, unk_idx) for t in tokens),
+            dtype=np.int64,
+            count=len(tokens),
+        )
+
+        return torch.from_numpy(encoded)
+
+    def _build_vocab(self, tokens: List[str], min_freq: int = 1) -> Dict[str, int]:
+        counter = Counter(tokens)
+        vocab = {"<pad>": 0, "<unk>": 1}
+        idx = 2
+        for token, freq in counter.items():
+            if freq >= min_freq and token not in vocab:
+                vocab[token] = idx
+                idx += 1
+        return vocab
 
     def _add_special_tokens(self, pretrained_vocab: Dict) -> Dict[str, int]:
         special_tokens = ["<pad>", "<unk>", "<eos>"]
@@ -76,8 +100,12 @@ class PTBDataset(Dataset):
 
         return word2idx
 
-    def download_ptb(self):
+    def get_vocab(self) -> Dict[str, int]:
+        return self.vocab
+
+    def _download_ptb(self):
         os.makedirs(self.data_dir, exist_ok=True)
+
         for split_name, url in self.urls.items():
             file_path = os.path.join(self.data_dir, f"{split_name}.txt")
             if not os.path.exists(file_path):
@@ -85,7 +113,6 @@ class PTBDataset(Dataset):
                 response = requests.get(url, stream=True)
                 response.raise_for_status()
 
-                # Get total file size for progress bar
                 total_size = int(response.headers.get("content-length", 0))
 
                 with open(file_path, "w", encoding="utf-8") as f:
@@ -102,47 +129,44 @@ class PTBDataset(Dataset):
                                 f.write(chunk)
                                 pbar.update(len(chunk.encode("utf-8")))
 
-    def load_data(self, split, vocab=None):
-        file_path = os.path.join(self.data_dir, f"{split}.txt")
-        with open(file_path, "r") as f:
-            text = f.read().replace("\n", "<eos>").split()
-
-        if vocab is None:
-            self.vocab = self.build_vocab(text)
-            assert max(self.vocab.values()) == len(self.vocab) - 1
-        else:
-            self.vocab = vocab
-
-        encoded = [self.vocab.get(token, self.vocab["<unk>"]) for token in text]
-        return encoded
-
-    def build_vocab(self, tokens, min_freq=1):
-        counter = Counter(tokens)
-        vocab = {"<pad>": 0, "<unk>": 1}
-        idx = 2
-        for token, freq in counter.items():
-            # also prevent <pad> and <unk> from over-writing
-            if freq >= min_freq and token not in vocab:
-                vocab[token] = idx
-                idx += 1
-        return vocab
-
-    def get_vocab(self):
-        return self.vocab
-
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.encoded) - self.seq_len
 
-    def __getitem__(self, idx):
-        x = torch.tensor(self.encoded[idx : idx + self.seq_len], dtype=torch.long)
-        y = torch.tensor(
-            self.encoded[idx + 1 : idx + self.seq_len + 1], dtype=torch.long
-        )
-        return x, y  # next-token prediction
+    # pyrefly: ignore [bad-param-name-override]
+    def __getitem__(self, idx: int):
+        x = self.encoded[idx : idx + self.seq_len]
+        y = self.encoded[idx + 1 : idx + self.seq_len + 1]
+        return x, y
+
+
+def get_num_workers(cfg) -> int:
+    import multiprocessing
+
+    num_workers = cfg.datasets.get("num_workers", None)
+
+    if isinstance(num_workers, int) and num_workers > 0:
+        return num_workers
+
+    num_cpus = multiprocessing.cpu_count()
+    return min(8, max(0, num_cpus - 2))
 
 
 def get_ptb_dataloaders(cfg):
     batch_size = cfg.train.batch_size
+    num_workers = get_num_workers(cfg)
+    pin_memory = cfg.datasets.get("pin_memory", torch.cuda.is_available())
+    prefetch_factor = cfg.datasets.get("prefetch_factor", 2)
+
+    print(f"DataLoader config: num_workers={num_workers}, pin_memory={pin_memory}")
+
+    loader_kwargs = {
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+    }
+
+    if num_workers > 0:
+        loader_kwargs["persistent_workers"] = True
+        loader_kwargs["prefetch_factor"] = prefetch_factor
 
     train_dataset = PTBDataset(cfg, split="train")
     vocab = train_dataset.get_vocab()
@@ -150,8 +174,58 @@ def get_ptb_dataloaders(cfg):
     valid_dataset = PTBDataset(cfg, split="valid", vocab=vocab)
     test_dataset = PTBDataset(cfg, split="test", vocab=vocab)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    valid_loader = DataLoader(valid_dataset, batch_size=batch_size)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=False,  # for the love of god, dont accidentally shuflle it again
+        drop_last=True,
+        **loader_kwargs,
+    )
+    valid_loader = DataLoader(
+        valid_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        **loader_kwargs,
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        **loader_kwargs,
+    )
 
     return DatasetBundle(train_loader, valid_loader, test_loader, vocab=vocab)
+
+
+if __name__ == "__main__":
+    from types import SimpleNamespace
+
+    cfg = SimpleNamespace(
+        datasets={
+            "data_dir": "../datasets/dataset_penn_treebank/",
+            "sequence_length": 10,
+            "use_cache": False,
+            "num_workers": 0,
+            "pin_memory": False,
+        },
+        models={"use_pretrained_embedding": False},
+        train=SimpleNamespace(batch_size=4),
+    )
+
+    train_dataset = PTBDataset(cfg, split="train")
+
+    idx = 100
+    x, y = train_dataset[idx]
+
+    print("Vocabulary size:", len(train_dataset.get_vocab()))
+    print("Input sequence (x):", x)
+    print("Target sequence (y):", y)
+
+    idx2word = {idx: word for word, idx in train_dataset.get_vocab().items()}
+    # pyrefly: ignore [no-matching-overload]
+    x_words = [idx2word.get(i.item(), "<unk>") for i in x]
+    # pyrefly: ignore [no-matching-overload]
+    y_words = [idx2word.get(i.item(), "<unk>") for i in y]
+
+    print("Input sequence (words):", x_words)
+    print("Target sequence (words):", y_words)

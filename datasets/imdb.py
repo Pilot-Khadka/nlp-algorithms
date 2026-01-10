@@ -62,8 +62,10 @@ class IMDBDataset(BaseNLPDataset):
         except (KeyboardInterrupt, Exception):
             if os.path.exists(temp_archive):
                 os.remove(temp_archive)
+            # pyrefly: ignore [unbound-name]
             if os.path.exists(temp_extract_path):
                 shutil.rmtree(temp_extract_path, ignore_errors=True)
+            # pyrefly: ignore [unbound-name]
             if os.path.exists(extract_path) and not self._is_complete_extraction(
                 extract_path
             ):

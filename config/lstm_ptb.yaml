@@ -6,6 +6,11 @@ datasets:
   valid_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.valid.txt"
   test_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.test.txt"
 
+  use_cache: true          # Cache encoded tensors to disk
+  num_workers: auto        # Set to integer or "auto" (cpu_count - 2)
+  pin_memory: true         # Pin memory for faster GPU transfer
+  prefetch_factor: 2       # Number of batches to prefetch per worker
+
 models:
   name: lstm
   input_dim: 300
@@ -16,11 +21,11 @@ models:
   weight_tying: true
 
 train:
-  epochs: 40
+  epochs: 15
   batch_size: 32
   multi_gpu: true
-  optimizer: sgd
-  learning_rate: 10.0
+  optimizer: adamw
+  learning_rate: 1e-3
   lr_decay: 0.25
   grad_clip: 0.25
   weight_decay: 1e-6

@@ -217,7 +217,7 @@ class LSTM(nn.Module):
         c = [c_i.clone() for c_i in cell]
 
         layer_input = x
-
+        outputs_t = torch.empty_like(layer_input)
         for layer_idx in range(L):
             w_ih = self.w_ih[layer_idx]
             w_hh = self.w_hh[layer_idx]
@@ -318,6 +318,7 @@ class LSTMNaive(BaseModel):
         self.sigmoid = nn.Sigmoid()
         self.tanh = nn.Tanh()
 
+    # pyrefly: ignore [bad-override]
     def forward(self, x, hidden=None):
         if self.embedding:
             x = self.embedding(x)
@@ -343,6 +344,7 @@ class LSTMNaive(BaseModel):
             outputs.append(h_t.unsqueeze(1))  # (B, 1, H)
 
         out = torch.cat(outputs, dim=1)
+        # pyrefly: ignore [not-callable]
         return self.fc(out) if self.fc else out
 
 

@@ -101,9 +101,11 @@ def get_tatoeba_dataloaders(cfg):
     print("cfg training:", cfg.training)
     batch_size = cfg.training.batch_size
     train_dataset = TatoebaDataset(cfg, split="train")
+    # pyrefly: ignore [missing-attribute]
     source_vocab = train_dataset.get_vocab()
 
     train_texts_src, train_texts_trg = train_dataset.load_raw_data()
+    # pyrefly: ignore [missing-attribute]
     target_vocab = DatasetUtils.build_vocab(train_texts_trg, cfg.dataset.vocab_size)
 
     train_dataset = TatoebaDataset(
@@ -125,5 +127,6 @@ def get_tatoeba_dataloaders(cfg):
         dev_loader,
         test_loader,
         vocab=source_vocab,
+        # pyrefly: ignore [unexpected-keyword]
         target_vocab=target_vocab,
     )

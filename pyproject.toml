@@ -14,3 +14,9 @@ dependencies = [
 [tool.setuptools]
 packages = ["utils"]
 
+[tool.pyrefly]
+project-includes = [
+    "**/*.py*",
+    "**/*.ipynb",
+]
+

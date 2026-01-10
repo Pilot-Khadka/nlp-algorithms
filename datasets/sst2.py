@@ -129,6 +129,7 @@ class SST2Dataset(BaseNLPDataset):
 
         root_label = None
         i = 1
+        # pyrefly: ignore [bad-assignment]
         while i < len(tree_string) and tree_string[i].isdigit():
             if root_label is None:
                 root_label = int(tree_string[i])
