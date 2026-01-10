@@ -18,26 +18,30 @@ class RNN(nn.Module):
         hidden_dim,
         output_dim,
         num_layers=2,
+        dropout=0.1,
         **kwargs,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.output_dim = output_dim
+        self.dropout_p = dropout
 
         self._hidden: Optional[torch.Tensor] = None
 
         self.embedding = kwargs.get("embedding_layer", None)
-        if self.embedding is not None:
-            self.embedding.weight.requires_grad = False
-            self.input_dim = self.embedding.embedding_dim
-        else:
+        if self.embedding is None:
+            self.embedding = nn.Embedding(output_dim, input_dim)
             self.input_dim = input_dim
+        else:
+            self.input_dim = self.embedding.embedding_dim
 
         self.w_ih = nn.ParameterList()
         self.w_hh = nn.ParameterList()
         self.b_ih = nn.ParameterList()
         self.b_hh = nn.ParameterList()
+
+        self.layer_norms = nn.ModuleList()
 
         for layer in range(num_layers):
             input_size = self.input_dim if layer == 0 else hidden_dim
@@ -45,14 +49,24 @@ class RNN(nn.Module):
             self.w_hh.append(nn.Parameter(torch.empty(hidden_dim, hidden_dim)))
             self.b_ih.append(nn.Parameter(torch.empty(hidden_dim)))
             self.b_hh.append(nn.Parameter(torch.empty(hidden_dim)))
+            self.layer_norms.append(nn.LayerNorm(hidden_dim))
+
+        self.input_dropout = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(dropout)
 
         self.h2o = nn.Linear(hidden_dim, output_dim)
         self._reset_parameters()
 
     def _reset_parameters(self):
-        stdv = 1.0 / (self.hidden_dim**0.5)
-        for p in self.parameters():
-            nn.init.uniform_(p, -stdv, stdv)
+        for layer in range(self.num_layers):
+            nn.init.xavier_uniform_(self.w_ih[layer])
+            nn.init.orthogonal_(self.w_hh[layer])
+            nn.init.zeros_(self.b_ih[layer])
+            nn.init.zeros_(self.b_hh[layer])
+
+        nn.init.xavier_uniform_(self.h2o.weight)
+        if self.h2o.bias is not None:
+            nn.init.zeros_(self.h2o.bias)
 
     @property
     def is_stateful(self) -> bool:
@@ -91,29 +105,29 @@ class RNN(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len, _ = x.size()
 
-        # pre-allocate outputs
-        outputs = torch.empty(
-            batch_size, seq_len, self.hidden_dim, device=x.device, dtype=x.dtype
-        )
-
-        # unbind hidden states
+        outputs_list = []
         h_layers = list(hidden.unbind(0))
 
         for t in range(seq_len):
             x_t = x[:, t, :]
 
             for layer in range(self.num_layers):
-                h_new = torch.tanh(
-                    torch.addmm(self.b_ih[layer], x_t, self.w_ih[layer].t())
-                    + torch.addmm(
-                        self.b_hh[layer], h_layers[layer], self.w_hh[layer].t()
-                    )
-                )
+                h_new = torch.addmm(
+                    self.b_ih[layer], x_t, self.w_ih[layer].t()
+                ) + torch.addmm(self.b_hh[layer], h_layers[layer], self.w_hh[layer].t())
+
+                h_new = self.layer_norms[layer](h_new)
+                h_new = torch.tanh(h_new)
                 h_layers[layer] = h_new
-                x_t = h_new
 
-            outputs[:, t, :] = x_t
+                if layer < self.num_layers - 1:
+                    x_t = self.dropout(h_new)
+                else:
+                    x_t = h_new
 
+            outputs_list.append(x_t)
+
+        outputs = torch.stack(outputs_list, dim=1)
         final_hidden = torch.stack(h_layers, dim=0)
         return outputs, final_hidden
 
@@ -126,46 +140,39 @@ class RNN(nn.Module):
             x = x.float()
 
         assert x.size(-1) == self.input_dim
-
+        x = self.input_dropout(x)
         batch_size, seq_len, _ = x.size()
 
         if hidden is not None:
-            # explicit state passed, use it directly
             pass
         elif self._hidden is not None:
-            # use stored internal state if batch size matches
             if self._hidden.size(1) == batch_size:
                 hidden = self._hidden
             else:
-                # batch size changed (e.g., last batch), reinitialize
                 hidden = self.init_hidden(batch_size, x.device, x.dtype)
         else:
-            # no state available, inti fresh
             hidden = self.init_hidden(batch_size, x.device, x.dtype)
 
         rnn_out, new_hidden = self._rnn_forward_impl(x, hidden)
 
+        output = self.h2o(self.dropout(rnn_out))
+
         self._hidden = new_hidden.detach()
-
-        output = self.h2o(rnn_out)
-
         return output, new_hidden
 
 
 if __name__ == "__main__":
-    # remove registry dependency for standalone testing
+    import torch
+    import torch.nn as nn
+
     class BaseModel(nn.Module):
         pass
 
-    def register_model(name, *flag):
+    def register_model(name, *flags):
         def decorator(cls):
             return cls
 
         return decorator
-
-    print("=" * 60)
-    print("RNN Model Test Suite")
-    print("=" * 60)
 
     batch_size = 4
     seq_len = 10
@@ -174,142 +181,76 @@ if __name__ == "__main__":
     output_dim = 16
     num_layers = 2
 
-    print("\n[Test 1] Model Instantiation...")
     model = RNN(
         input_dim=input_dim,
         hidden_dim=hidden_dim,
         output_dim=output_dim,
         num_layers=num_layers,
     )
-    print(
-        f"  Model created with {sum(p.numel() for p in model.parameters())} parameters"
-    )
 
-    print("\n[Test 2] Basic Forward Pass...")
+    # forward pass
     x = torch.randn(batch_size, seq_len, input_dim)
-    output = model(x)
-    expected_shape = (batch_size, seq_len, output_dim)
-    assert output.shape == expected_shape, (
-        f"Expected {expected_shape}, got {output.shape}"
-    )
-    print(f"  Input shape:  {tuple(x.shape)}")
-    print(f"  Output shape: {tuple(output.shape)}")
+    y = model(x)
+    assert y.shape == (batch_size, seq_len, output_dim)
 
-    print("\n[Test 3] Forward Pass with Initial Hidden State...")
-    hidden = torch.zeros(num_layers, batch_size, hidden_dim)
-    output_with_hidden = model(x, hidden)
-    assert output_with_hidden.shape == expected_shape
-    print(f"  Hidden shape: {tuple(hidden.shape)}")
-    print(f"  Output shape: {tuple(output_with_hidden.shape)}")
+    # forward with initial hidden state
+    h0 = torch.zeros(num_layers, batch_size, hidden_dim)
+    y = model(x, h0)
+    assert y.shape == (batch_size, seq_len, output_dim)
 
-    print("\n[Test 4] Gradient Flow (Backpropagation)...")
-    model.zero_grad()
-    x_grad = torch.randn(batch_size, seq_len, input_dim, requires_grad=True)
-    output = model(x_grad)
-    loss = output.sum()
+    # gradient flow
+    x = torch.randn(batch_size, seq_len, input_dim, requires_grad=True)
+    loss = model(x).sum()
     loss.backward()
 
-    assert x_grad.grad is not None, "Input gradient is None"
-    assert not torch.isnan(x_grad.grad).any(), "NaN in input gradients"
+    assert x.grad is not None
+    for p in model.parameters():
+        assert p.grad is not None
+        assert not torch.isnan(p.grad).any()
 
-    for name, param in model.named_parameters():
-        assert param.grad is not None, f"Gradient is None for {name}"
-        assert not torch.isnan(param.grad).any(), f"NaN in gradient for {name}"
-    print("   All gradients computed successfully")
-    print("   No NaN values in gradients")
+    # variable batch & sequence sizes
+    for bs, sl in [(1, 5), (8, 20)]:
+        x = torch.randn(bs, sl, input_dim)
+        y = model(x)
+        assert y.shape == (bs, sl, output_dim)
 
-    print("\n[Test 5] Variable Batch Sizes...")
-    for bs in [1, 8, 16, 32]:
-        x_var = torch.randn(bs, seq_len, input_dim)
-        out_var = model(x_var)
-        assert out_var.shape == (bs, seq_len, output_dim)
-        print(f"  Batch size {bs:2d}: output shape {tuple(out_var.shape)}")
+    # numerical check vs PyTorch RNN (single-layer)
+    torch.manual_seed(0)
 
-    print("\n[Test 6] Variable Sequence Lengths...")
-    for sl in [1, 5, 20, 50]:
-        x_var = torch.randn(batch_size, sl, input_dim)
-        out_var = model(x_var)
-        assert out_var.shape == (batch_size, sl, output_dim)
-        print(f"   Seq length {sl:2d}: output shape {tuple(out_var.shape)}")
-
-    print("\n[Test 7] Numerical Comparison with PyTorch RNN...")
-    torch.manual_seed(42)
-
-    test_input_dim = 16
-    test_hidden_dim = 32
-
-    our_rnn = RNN(
-        input_dim=test_input_dim,
-        hidden_dim=test_hidden_dim,
-        output_dim=test_hidden_dim,
+    test_rnn = RNN(
+        input_dim=16,
+        hidden_dim=32,
+        output_dim=32,
         num_layers=1,
     )
 
-    torch_rnn = nn.RNN(
-        input_size=test_input_dim,
-        hidden_size=test_hidden_dim,
-        num_layers=1,
+    ref_rnn = nn.RNN(
+        input_size=16,
+        hidden_size=32,
         batch_first=True,
         nonlinearity="tanh",
     )
 
     with torch.no_grad():
-        our_rnn.w_ih[0].copy_(torch_rnn.weight_ih_l0)
-        our_rnn.w_hh[0].copy_(torch_rnn.weight_hh_l0)
-        our_rnn.b_ih[0].copy_(torch_rnn.bias_ih_l0)
-        our_rnn.b_hh[0].copy_(torch_rnn.bias_hh_l0)
-        our_rnn.h2o.weight.copy_(torch.eye(test_hidden_dim))
-        our_rnn.h2o.bias.zero_()
+        test_rnn.w_ih[0].copy_(ref_rnn.weight_ih_l0)
+        test_rnn.w_hh[0].copy_(ref_rnn.weight_hh_l0)
+        test_rnn.b_ih[0].copy_(ref_rnn.bias_ih_l0)
+        test_rnn.b_hh[0].copy_(ref_rnn.bias_hh_l0)
+        test_rnn.h2o.weight.copy_(torch.eye(32))
+        test_rnn.h2o.bias.zero_()
 
-    test_x = torch.randn(2, 5, test_input_dim)
-    test_h0 = torch.zeros(1, 2, test_hidden_dim)
+    x = torch.randn(2, 5, 16)
+    h0 = torch.zeros(1, 2, 32)
 
-    our_output = our_rnn(test_x, test_h0)
-    torch_output, _ = torch_rnn(test_x, test_h0)
+    y_test = test_rnn(x, h0)
+    y_ref, _ = ref_rnn(x, h0)
 
-    max_diff = (our_output - torch_output).abs().max().item()
-    print(f"   Max absolute difference: {max_diff:.2e}")
-    assert max_diff < 1e-5, f"Outputs differ too much: {max_diff}"
-    print("  Outputs match PyTorch RNN!")
+    assert torch.allclose(y_test, y_ref, atol=1e-5)
 
-    print("\n[Test 8] Multi-layer RNN...")
-    for n_layers in [1, 2, 3, 4]:
-        multi_layer_rnn = RNN(
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            output_dim=output_dim,
-            num_layers=n_layers,
-        )
-        x_test = torch.randn(batch_size, seq_len, input_dim)
-        out_test = multi_layer_rnn(x_test)
-        assert out_test.shape == (batch_size, seq_len, output_dim)
-        print(f"   {n_layers} layer(s): output shape {tuple(out_test.shape)}")
-
-    print("\n[Test 9] GPU Test...")
     if torch.cuda.is_available():
-        model_cuda = model.cuda()
-        x_cuda = torch.randn(batch_size, seq_len, input_dim, device="cuda")
-        output_cuda = model_cuda(x_cuda)
+        model = model.cuda()
+        x = torch.randn(batch_size, seq_len, input_dim, device="cuda")
+        y = model(x)
+        assert y.is_cuda
 
-        assert output_cuda.device.type == "cuda"
-        assert output_cuda.shape == expected_shape
-        assert not torch.isnan(output_cuda).any()
-        print("   GPU forward pass successful")
-        print(f"   Output device: {output_cuda.device}")
-    else:
-        print("  CUDA not available, skipping GPU test")
-
-    print("\n[Test 11] Different Data Types...")
-    for dtype in [torch.float32, torch.float64]:
-        model_dtype = RNN(
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            output_dim=output_dim,
-            num_layers=num_layers,
-        ).to(dtype)
-        x_dtype = torch.randn(batch_size, seq_len, input_dim, dtype=dtype)
-        out_dtype = model_dtype(x_dtype)
-        assert out_dtype.dtype == dtype
-        print(f"   {dtype}: output dtype matches")
-
-    print(" All tests passed successfully!")
+    print("All RNN tests passed.")

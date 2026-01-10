@@ -1,6 +1,6 @@
 datasets:
   name: ptb
-  sequence_length: 70
+  sequence_length: 35
   data_dir: datasets/dataset_penn_treebank/
   train_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.train.txt"
   valid_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.valid.txt"
@@ -9,23 +9,27 @@ datasets:
   pin_memory: true
   prefetch_factor: 2
 
+
 models:
-  name: rnn
-  input_dim: 300
-  hidden_dim: 650
-  num_layers: 2
-  dropout: 0.5
+  name: lstm
+  input_dim: 200
+  hidden_dim: 200
+  num_layers: 1
+  dropout: 0.1
+  embed_dropout: 0.05
+  output_dropout: 0.1
+  weight_dropout: 0.1
   bidirectional: false
+  weight_tying: true
 
 train:
-  epochs: 20
-  batch_size: 32
-  multi_gpu: true
+  epochs: 10
+  batch_size: 64
   optimizer: adamw
   learning_rate: 1e-3
-  lr_decay: 0.5
   grad_clip: 0.25
-  weight_decay: 1e-4
+  weight_decay: 1e-6
+  compile_model: false
 
 tasks:
   name: language_modeling
