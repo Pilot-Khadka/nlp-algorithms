@@ -19,7 +19,7 @@ models:
 
 train:
   epochs: 40
-  batch_size: 64
+  batch_size: 32
   multi_gpu: true
   optimizer: adamw
   learning_rate: 1e-3

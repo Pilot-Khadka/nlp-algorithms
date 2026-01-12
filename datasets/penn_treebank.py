@@ -1,5 +1,4 @@
-from typing import Dict, Optional, List
-
+from typing import Dict, Optional, List, Tuple, Iterator
 
 import os
 import requests
@@ -8,13 +7,12 @@ from tqdm import tqdm
 from collections import Counter
 
 import torch
-from torch.utils.data import Dataset, DataLoader
 
 from datasets.base import DatasetBundle
 from models.model_registry import load_vocab
 
 
-class PTBDataset(Dataset):
+class PTBCorpus:
     def __init__(self, cfg, split: str, vocab: Optional[Dict[str, int]] = None):
         self.data_dir = cfg.datasets["data_dir"]
         self.seq_len = cfg.datasets["sequence_length"]
@@ -44,7 +42,7 @@ class PTBDataset(Dataset):
         else:
             self.vocab = vocab
 
-        self.encoded = self._encode_tokens(tokens)
+        self.data = self._encode_tokens(tokens)
 
     def _load_tokens(self) -> List[str]:
         file_path = os.path.join(self.data_dir, f"{self.split}.txt")
@@ -54,13 +52,11 @@ class PTBDataset(Dataset):
     def _encode_tokens(self, tokens: List[str]) -> torch.Tensor:
         unk_idx = self.vocab["<unk>"]
         vocab_get = self.vocab.get
-
         encoded = np.fromiter(
             (vocab_get(t, unk_idx) for t in tokens),
             dtype=np.int64,
             count=len(tokens),
         )
-
         return torch.from_numpy(encoded)
 
     def _build_vocab(self, tokens: List[str], min_freq: int = 1) -> Dict[str, int]:
@@ -75,7 +71,6 @@ class PTBDataset(Dataset):
 
     def _add_special_tokens(self, pretrained_vocab: Dict) -> Dict[str, int]:
         special_tokens = ["<pad>", "<unk>", "<eos>"]
-
         word2idx = pretrained_vocab["word2idx"].copy()
         idx2word = pretrained_vocab["idx2word"].copy()
         word_freq = pretrained_vocab.get("word_freq", [])
@@ -87,17 +82,14 @@ class PTBDataset(Dataset):
             if token not in word2idx:
                 word2idx[token] = next_idx
                 idx2word[next_idx] = token
-
                 if isinstance(word_freq, dict):
                     word_freq[token] = 1
                 elif isinstance(word_freq, list):
                     while len(word_freq) <= next_idx:
                         word_freq.append(1)
                     word_freq[next_idx] = 1
-
                 print(f"Added special token '{token}' with index {next_idx}")
                 next_idx += 1
-
         return word2idx
 
     def get_vocab(self) -> Dict[str, int]:
@@ -105,16 +97,13 @@ class PTBDataset(Dataset):
 
     def _download_ptb(self):
         os.makedirs(self.data_dir, exist_ok=True)
-
         for split_name, url in self.urls.items():
             file_path = os.path.join(self.data_dir, f"{split_name}.txt")
             if not os.path.exists(file_path):
                 print(f"Downloading {split_name}...")
                 response = requests.get(url, stream=True)
                 response.raise_for_status()
-
                 total_size = int(response.headers.get("content-length", 0))
-
                 with open(file_path, "w", encoding="utf-8") as f:
                     with tqdm(
                         total=total_size,
@@ -129,103 +118,117 @@ class PTBDataset(Dataset):
                                 f.write(chunk)
                                 pbar.update(len(chunk.encode("utf-8")))
 
-    def __len__(self) -> int:
-        return len(self.encoded) - self.seq_len
+    def batchify(
+        self, batch_size: int, device: Optional[torch.device] = None
+    ) -> torch.Tensor:
+        """
+        Reshape flat data into batch_size parallel streams.
 
-    # pyrefly: ignore [bad-param-name-override]
-    def __getitem__(self, idx: int):
-        x = self.encoded[idx : idx + self.seq_len]
-        y = self.encoded[idx + 1 : idx + self.seq_len + 1]
+        Example with batch_size=3 and data=[0,1,2,3,4,5,6,7,8,9,10,11]:
+            :stream 0: [0, 1, 2, 3]
+            :stream 1: [4, 5, 6, 7]
+            :stream 2: [8, 9, 10, 11]
+
+            :result shape: (4, 3)
+            [[0, 4, 8],
+             [1, 5, 9],
+             [2, 6, 10],
+             [3, 7, 11]]
+        """
+        n_tokens = self.data.size(0)
+        n_batches = n_tokens // batch_size
+
+        data = self.data.narrow(0, 0, n_batches * batch_size)
+        data = data.view(batch_size, -1).t().contiguous()
+
+        if device is not None:
+            data = data.to(device)
+
+        return data
+
+
+class PTBIterator:
+    def __init__(
+        self,
+        data: torch.Tensor,
+        seq_len: int,
+        device: Optional[torch.device] = None,
+        batch_first: bool = True,
+    ):
+        """
+        :data: Batchified tensor of shape (num_steps, batch_size)
+        :seq_len: Number of time steps per batch
+        :device: Device to place tensors on
+        :batch_first: If True, return (batch_size, seq_len) instead of (seq_len, batch_size)
+        """
+        self.data = data
+        self.seq_len = seq_len
+        self.device = device
+        self.batch_first = batch_first
+        self.pos = 0
+
+        self.n_steps = data.size(0)
+        self.batch_size = data.size(1)
+
+    def __iter__(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+        self.pos = 0
+        return self
+
+    def __next__(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.pos >= self.n_steps - 1:
+            raise StopIteration
+
+        actual_seq_len = min(self.seq_len, self.n_steps - 1 - self.pos)
+
+        x = self.data[self.pos : self.pos + actual_seq_len]
+        y = self.data[self.pos + 1 : self.pos + 1 + actual_seq_len]
+
+        self.pos += actual_seq_len
+
+        if self.device is not None:
+            x = x.to(self.device)
+            y = y.to(self.device)
+
+        if self.batch_first:
+            x = x.t().contiguous()  # (batch_size, seq_len)
+            y = y.t().contiguous()
+
         return x, y
 
+    def __len__(self) -> int:
+        return (self.n_steps - 1 + self.seq_len - 1) // self.seq_len
 
-def get_num_workers(cfg) -> int:
-    import multiprocessing
-
-    num_workers = cfg.datasets.get("num_workers", None)
-
-    if isinstance(num_workers, int) and num_workers > 0:
-        return num_workers
-
-    num_cpus = multiprocessing.cpu_count()
-    return min(8, max(0, num_cpus - 2))
+    def reset(self):
+        self.pos = 0
 
 
 def get_ptb_dataloaders(cfg):
     batch_size = cfg.train.batch_size
-    num_workers = get_num_workers(cfg)
-    pin_memory = cfg.datasets.get("pin_memory", torch.cuda.is_available())
-    prefetch_factor = cfg.datasets.get("prefetch_factor", 2)
+    seq_len = cfg.datasets["sequence_length"]
+    batch_first = cfg.datasets.get("batch_first", True)
 
-    print(f"DataLoader config: num_workers={num_workers}, pin_memory={pin_memory}")
+    if hasattr(cfg.train, "device"):
+        device = torch.device(cfg.train.device)
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    loader_kwargs = {
-        "num_workers": num_workers,
-        "pin_memory": pin_memory,
-    }
+    train_corpus = PTBCorpus(cfg, split="train")
+    vocab = train_corpus.get_vocab()
 
-    if num_workers > 0:
-        loader_kwargs["persistent_workers"] = True
-        loader_kwargs["prefetch_factor"] = prefetch_factor
+    valid_corpus = PTBCorpus(cfg, split="valid", vocab=vocab)
+    test_corpus = PTBCorpus(cfg, split="test", vocab=vocab)
 
-    train_dataset = PTBDataset(cfg, split="train")
-    vocab = train_dataset.get_vocab()
+    train_data = train_corpus.batchify(batch_size, device)
+    valid_data = valid_corpus.batchify(batch_size, device)
+    test_data = test_corpus.batchify(batch_size, device)
 
-    valid_dataset = PTBDataset(cfg, split="valid", vocab=vocab)
-    test_dataset = PTBDataset(cfg, split="test", vocab=vocab)
+    print(f"Train data shape: {train_data.shape}")  # (n_steps, batch_size)
+    print(f"Valid data shape: {valid_data.shape}")
+    print(f"Test data shape: {test_data.shape}")
+    print(f"Vocab size: {len(vocab)}")
 
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=False,  # for the love of god, dont accidentally shuflle it again
-        drop_last=True,
-        **loader_kwargs,
-    )
-    valid_loader = DataLoader(
-        valid_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        **loader_kwargs,
-    )
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        **loader_kwargs,
-    )
+    train_iter = PTBIterator(train_data, seq_len, device, batch_first)
+    valid_iter = PTBIterator(valid_data, seq_len, device, batch_first)
+    test_iter = PTBIterator(test_data, seq_len, device, batch_first)
 
-    return DatasetBundle(train_loader, valid_loader, test_loader, vocab=vocab)
-
-
-if __name__ == "__main__":
-    from types import SimpleNamespace
-
-    cfg = SimpleNamespace(
-        datasets={
-            "data_dir": "../datasets/dataset_penn_treebank/",
-            "sequence_length": 10,
-            "use_cache": False,
-            "num_workers": 0,
-            "pin_memory": False,
-        },
-        models={"use_pretrained_embedding": False},
-        train=SimpleNamespace(batch_size=4),
-    )
-
-    train_dataset = PTBDataset(cfg, split="train")
-
-    idx = 100
-    x, y = train_dataset[idx]
-
-    print("Vocabulary size:", len(train_dataset.get_vocab()))
-    print("Input sequence (x):", x)
-    print("Target sequence (y):", y)
-
-    idx2word = {idx: word for word, idx in train_dataset.get_vocab().items()}
-    # pyrefly: ignore [no-matching-overload]
-    x_words = [idx2word.get(i.item(), "<unk>") for i in x]
-    # pyrefly: ignore [no-matching-overload]
-    y_words = [idx2word.get(i.item(), "<unk>") for i in y]
-
-    print("Input sequence (words):", x_words)
-    print("Target sequence (words):", y_words)
+    return DatasetBundle(train_iter, valid_iter, test_iter, vocab=vocab)
