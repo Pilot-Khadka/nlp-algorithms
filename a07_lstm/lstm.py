@@ -1,4 +1,4 @@
-from typing import List, Tuple, Optional, Union
+from typing import List, Tuple, Optional, Union, cast
 
 
 import torch
@@ -20,7 +20,7 @@ class LockedDropout(nn.Module):
         self.p = p
         self._mask: Optional[torch.Tensor] = None
 
-    def reset_mask(self):
+    def reset_mask(self) -> None:
         self._mask = None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -75,10 +75,6 @@ class LSTM(nn.Module):
         self.output_dim = output_dim
         self.num_layers = num_layers
         self.tie_weights = tie_weights
-
-        # for state management
-        self._hidden: Optional[List[torch.Tensor]] = None
-        self._cell: Optional[List[torch.Tensor]] = None
 
         self.embedding = kwargs.get("embedding_layer", None)
         if self.embedding is None:
@@ -170,38 +166,12 @@ class LSTM(nn.Module):
         ]
         return hidden, cell
 
-    def _reset_dropout_masks(self):
+    def _reset_dropout_masks(self) -> None:
         for dropout in self.layer_dropouts:
-            dropout.reset_mask()
+            cast(LockedDropout, dropout).reset_mask()
         for dropout in self.recurrent_dropouts:
-            dropout.reset_mask()
+            cast(LockedDropout, dropout).reset_mask()
         self.output_dropout_module.reset_mask()
-
-    @property
-    def is_stateful(self) -> bool:
-        """if it can maintain state across forward calls."""
-        return True
-
-    def reset_state(self) -> None:
-        """call at the start of each epoch."""
-        self._hidden = None
-        self._cell = None
-
-    def get_state(self) -> Optional[Tuple[List[torch.Tensor], List[torch.Tensor]]]:
-        """current internal state."""
-        if self._hidden is None or self._cell is None:
-            return None
-        return (self._hidden, self._cell)
-
-    def set_state(
-        self, state: Optional[Tuple[List[torch.Tensor], List[torch.Tensor]]]
-    ) -> None:
-        """useful for resuming or beam search"""
-        if state is None:
-            self._hidden = None
-            self._cell = None
-        else:
-            self._hidden, self._cell = state
 
     def _forward(
         self,
@@ -268,17 +238,8 @@ class LSTM(nn.Module):
         emb = self.embed_dropout(emb)
 
         if hidden is not None and cell is not None:
-            # explicit state passed, use it directly
             pass
-        elif self._hidden is not None and self._cell is not None:
-            # use stored internal state if batch size matches
-            if self._hidden[0].size(0) == batch_size:
-                hidden, cell = self._hidden, self._cell
-            else:
-                # batch size changed (e.g., last batch), reinitialize
-                hidden, cell = self.init_hidden(batch_size, x.device, emb.dtype)
         else:
-            # no state available, init fresh
             hidden, cell = self.init_hidden(batch_size, x.device, emb.dtype)
 
         lstm_out, new_hidden, new_cell = self._forward(emb, hidden, cell)
@@ -289,9 +250,6 @@ class LSTM(nn.Module):
 
         output = self.fc(lstm_out)
 
-        # store state for next forward call (stateful mode)
-        self._hidden = [h.detach() for h in new_hidden]
-        self._cell = [c.detach() for c in new_cell]
         return output, (new_hidden, new_cell)
 
 

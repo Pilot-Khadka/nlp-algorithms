@@ -4,9 +4,11 @@ from tasks.base_task import BaseTask
 
 
 class SentimentAnalysisTask(BaseTask):
+    @property
     def name(self):
         return "sentiment_analysis"
 
+    # pyrefly: ignore [bad-param-name-override]
     def train_step(self, batch, model, criterion, optimizer, device):
         inputs, labels = batch  # inputs: [batch, seq_len], labels: [batch]
         inputs, labels = inputs.to(device), labels.to(device)
@@ -25,6 +27,7 @@ class SentimentAnalysisTask(BaseTask):
     def get_loss_function(self):
         return nn.CrossEntropyLoss()
 
+    # pyrefly: ignore [bad-param-name-override]
     def eval_step(self, batch, model, criterion, device):
         inputs, labels = batch
         inputs, labels = inputs.to(device), labels.to(device)
@@ -41,6 +44,7 @@ class SentimentAnalysisTask(BaseTask):
     def get_output_dim(self, dataset_bundle):
         return dataset_bundle.num_classes
 
+    # pyrefly: ignore [bad-override]
     def compute_metrics(self, outputs, targets):
         predictions = torch.argmax(outputs, dim=1)
 
@@ -81,8 +85,11 @@ class SentimentAnalysisTask(BaseTask):
             # Support : number of true instances of this class
             support = (target_np == class_idx).sum()
 
+            # pyrefly: ignore [bad-argument-type]
             precision_per_class.append(precision)
+            # pyrefly: ignore [bad-argument-type]
             recall_per_class.append(recall)
+            # pyrefly: ignore [bad-argument-type]
             f1_per_class.append(f1)
             support_per_class.append(support)
 

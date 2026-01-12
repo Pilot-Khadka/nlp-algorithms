@@ -166,6 +166,7 @@ def train_single_gpu(cfg, gpu_id: int = 0):
     training_config = cfg.train
     checkpoint = cfg.train.get("checkpoint", None)
     trainer = Trainer(
+        # pyrefly: ignore [bad-argument-type]
         model=model,
         task=task,
         train_loader=train_loader,

@@ -1,4 +1,4 @@
-from typing import Any, Dict, Tuple, List, Optional
+from typing import Any, Dict, List
 
 
 from abc import ABC, abstractmethod
@@ -9,34 +9,40 @@ from torch import nn
 
 
 class BaseTask(ABC):
+    @property
     @abstractmethod
-    def name(self):
+    def name(self) -> str:
         pass
 
     @abstractmethod
-    def get_output_dim(self, dataset_bundle: Any) -> int:
-        raise NotImplementedError()
+    def get_output_dim(self, dataset_bundle: Any) -> int: ...
 
     @abstractmethod
-    def train_step(
+    def train_one_epoch(
         self,
-        batch: Any,
-        model: nn.Module,
+        model,
+        train_loader,
         optimizer: torch.optim.Optimizer,
-        grad_clip: Optional[float],
         device: torch.device,
-    ) -> torch.Tensor:
-        pass
+        epoch: int,
+        total_epochs: int,
+        grad_clip: float,
+        use_ddp: bool = False,
+        is_main: bool = True,
+    ) -> float: ...
 
     @abstractmethod
-    def eval_step(
+    def evaluate_one_epoch(
         self,
-        batch: Any,
-        model: nn.Module,
+        model,
+        valid_loader,
         device: torch.device,
-        metrics_list: List[str],
-    ) -> Tuple[float, Dict[str, float]]:
-        pass
+        epoch: int,
+        total_epochs: int,
+        metrics_tracker,
+        use_ddp: bool = False,
+        is_main: bool = True,
+    ) -> tuple[float, Dict[str, float]]: ...
 
     def compute_metrics(
         self,
@@ -45,3 +51,9 @@ class BaseTask(ABC):
         metrics_list: List[str],
     ) -> Dict[str, float]:
         return {}
+
+    def on_epoch_start(self, model: nn.Module, training: bool = True) -> None:
+        pass
+
+    def on_epoch_end(self, model: nn.Module, training: bool = True) -> None:
+        pass

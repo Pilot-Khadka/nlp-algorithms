@@ -1,7 +1,6 @@
 from typing import Dict, List, Optional
 
 
-import math
 import torch
 from collections import defaultdict
 
@@ -52,7 +51,7 @@ class MetricsTracker:
         if not metrics:
             return f"{prefix}No metrics available"
 
-        formatted = []
+        formatted: list[str] = []
         for name, value in sorted(metrics.items()):
             formatted.append(f"{name}: {value:.4f}")
 

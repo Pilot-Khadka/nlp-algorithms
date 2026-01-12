@@ -1,10 +1,8 @@
 from typing import Dict, Any, Optional, Union
 
-
 from pathlib import Path
+
 import torch
-from tqdm import tqdm
-import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -17,7 +15,7 @@ from utils.utils import save_checkpoint, load_checkpoint
 class Trainer:
     def __init__(
         self,
-        model: nn.Module,
+        model,
         task: BaseTask,
         train_loader: DataLoader,
         valid_loader: DataLoader,
@@ -30,6 +28,7 @@ class Trainer:
         resume_from: Optional[Union[str, Path]] = None,
     ) -> None:
         self.gpu_id = gpu_id
+        # pyrefly: ignore [read-only]
         self.device = torch.device(f"cuda:{gpu_id}")
         self.use_ddp = use_ddp
         self.is_main = not use_ddp or gpu_id == 0
@@ -58,9 +57,12 @@ class Trainer:
                 patience=1,
             )
         else:
+            # pyrefly: ignore [bad-assignment]
             self.scheduler = None
 
         self.start_epoch = 0
+        self.best_valid_loss = float("inf")
+
         if resume_from is not None:
             self.logger.info(f"Loading model from checkpoint:{resume_from}")
             start_epoch, best_valid_loss = load_checkpoint(
@@ -75,114 +77,10 @@ class Trainer:
 
         metric_names = list(metrics.keys()) if isinstance(metrics, dict) else metrics
         self.metrics_tracker = MetricsTracker(metric_names)
-        self.best_valid_loss = float("inf")
 
         if self.is_main:
             self.checkpoint_dir = Path(config.get("checkpoints", "./checkpoints"))
             self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-
-    def _run_train_epoch(self, epoch: int) -> float:
-        self.model.train()
-
-        if self.use_ddp:
-            self.train_loader.sampler.set_epoch(epoch)
-
-        # reset model state at epoch start (for stateful models like LSTM)
-        if hasattr(self.task, "on_epoch_start"):
-            self.task.on_epoch_start(self.model, training=True)
-
-        total_train_loss = 0
-
-        if self.is_main:
-            train_progress = tqdm(
-                self.train_loader,
-                desc=f"Epoch {epoch + 1}/{self.config['epochs']} [Train]",
-                leave=False,
-            )
-        else:
-            train_progress = self.train_loader
-
-        for batch_idx, batch in enumerate(train_progress):
-            loss = self.task.train_step(
-                batch, self.model, self.optimizer, self.config.grad_clip, self.device
-            )
-            total_train_loss += loss
-
-            if self.is_main and hasattr(train_progress, "set_postfix"):
-                train_progress.set_postfix(
-                    {
-                        "Loss": f"{loss:.4f}",
-                        "Avg Loss": f"{total_train_loss / (batch_idx + 1):.4f}",
-                    }
-                )
-
-        if hasattr(self.task, "on_epoch_end"):
-            self.task.on_epoch_end(self.model, training=True)
-
-        avg_train_loss = total_train_loss / len(self.train_loader)
-
-        if self.use_ddp:
-            avg_train_loss_tensor = torch.tensor(avg_train_loss, device=self.device)
-            dist.all_reduce(avg_train_loss_tensor, op=dist.ReduceOp.AVG)
-            avg_train_loss = avg_train_loss_tensor.item()
-
-        return avg_train_loss
-
-    def _run_valid_epoch(self, epoch: int) -> tuple[float, Dict[str, float]]:
-        self.model.eval()
-        total_valid_loss = 0.0
-        self.metrics_tracker.reset()
-
-        # reset model state for validation (fresh start)
-        if hasattr(self.task, "on_epoch_start"):
-            self.task.on_epoch_start(self.model, training=False)
-
-        if self.is_main:
-            valid_progress = tqdm(
-                self.valid_loader,
-                desc=f"Epoch {epoch + 1}/{self.config['epochs']} [Valid]",
-                leave=False,
-            )
-        else:
-            valid_progress = self.valid_loader
-
-        with torch.no_grad():
-            for batch_idx, batch in enumerate(valid_progress):
-                loss, batch_metrics = self.task.eval_step(
-                    batch, self.model, self.device, self.metrics_tracker.metric_names
-                )
-                total_valid_loss += loss
-                batch_size = batch[0].size(0)
-                self.metrics_tracker.update(batch_metrics, batch_size)
-
-                if self.is_main and hasattr(valid_progress, "set_postfix"):
-                    current_metrics = self.metrics_tracker.get_averages()
-                    postfix = {
-                        "Val Loss": f"{loss:.4f}",
-                        "Avg Val Loss": f"{total_valid_loss / (batch_idx + 1):.4f}",
-                    }
-                    postfix.update({k: f"{v:.4f}" for k, v in current_metrics.items()})
-                    valid_progress.set_postfix(postfix)
-
-        if hasattr(self.task, "on_epoch_end"):
-            self.task.on_epoch_end(self.model, training=False)
-
-        avg_valid_loss = total_valid_loss / len(self.valid_loader)
-
-        if self.use_ddp:
-            avg_valid_loss_tensor = torch.tensor(avg_valid_loss, device=self.device)
-            dist.all_reduce(avg_valid_loss_tensor, op=dist.ReduceOp.AVG)
-            avg_valid_loss = avg_valid_loss_tensor.item()
-
-            avg_metrics = self.metrics_tracker.get_averages()
-            for key in avg_metrics:
-                metric_tensor = torch.tensor(avg_metrics[key], device=self.device)
-                dist.all_reduce(metric_tensor, op=dist.ReduceOp.AVG)
-                avg_metrics[key] = metric_tensor.item()
-        else:
-            avg_metrics = self.metrics_tracker.get_averages()
-
-        return avg_valid_loss, avg_metrics
 
     def _save_checkpoint(
         self,
@@ -207,7 +105,7 @@ class Trainer:
 
         save_checkpoint(
             checkpoint_path=self.checkpoint_dir / checkpoint_name,
-            epoch=epoch + 1,  # next epoch to run
+            epoch=epoch + 1,
             optimizer=self.optimizer,
             model=unwrapped_model,
             scheduler=self.scheduler,
@@ -217,8 +115,28 @@ class Trainer:
 
     def train(self) -> None:
         for epoch in range(self.start_epoch, self.config["epochs"]):
-            avg_train_loss = self._run_train_epoch(epoch)
-            avg_valid_loss, avg_metrics = self._run_valid_epoch(epoch)
+            avg_train_loss = self.task.train_one_epoch(
+                model=self.model,
+                train_loader=self.train_loader,
+                optimizer=self.optimizer,
+                device=self.device,
+                epoch=epoch,
+                total_epochs=self.config["epochs"],
+                grad_clip=self.config.grad_clip,
+                use_ddp=self.use_ddp,
+                is_main=self.is_main,
+            )
+
+            avg_valid_loss, avg_metrics = self.task.evaluate_one_epoch(
+                model=self.model,
+                valid_loader=self.valid_loader,
+                device=self.device,
+                epoch=epoch,
+                total_epochs=self.config["epochs"],
+                metrics_tracker=self.metrics_tracker,
+                use_ddp=self.use_ddp,
+                is_main=self.is_main,
+            )
 
             if self.scheduler is not None:
                 self.scheduler.step(avg_valid_loss)
@@ -244,9 +162,9 @@ class Trainer:
                     self._save_checkpoint(
                         epoch, avg_valid_loss, avg_train_loss, avg_metrics, "best.pt"
                     )
-                    self.logger.info(
-                        f"Saved new best model with valid loss: {self.best_valid_loss:.4f}"
-                    )
+                    # self.logger.info(
+                    #     f"Saved new best model with valid loss: {self.best_valid_loss:.4f}"
+                    # )
 
             if self.use_ddp:
                 dist.barrier()

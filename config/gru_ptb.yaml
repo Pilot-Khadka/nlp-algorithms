@@ -1,32 +1,36 @@
 datasets:
   name: ptb
-  sequence_length: 35
+  sequence_length: 70
   data_dir: datasets/dataset_penn_treebank/
   train_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.train.txt"
   valid_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.valid.txt"
   test_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.test.txt"
+
+  use_cache: true
   num_workers: auto
   pin_memory: true
   prefetch_factor: 2
 
 models:
-  name: rnn
+  name: gru
   input_dim: 300
   hidden_dim: 650
   num_layers: 2
   dropout: 0.5
   bidirectional: false
+  weight_tying: true
 
 train:
-  epochs: 20
+  epochs: 15
   batch_size: 32
   multi_gpu: true
   optimizer: adamw
   learning_rate: 1e-3
-  lr_decay: 0.5
+  lr_decay: 0.25
   grad_clip: 0.25
-  weight_decay: 1e-4
+  weight_decay: 1e-6
   compile_model: false
+  # checkpoint: "checkpoints/best.pt"
 
 tasks:
   name: language_modeling

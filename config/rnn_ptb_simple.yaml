@@ -1,5 +1,3 @@
-
-
 datasets:
   name: ptb
   sequence_length: 35 # 70

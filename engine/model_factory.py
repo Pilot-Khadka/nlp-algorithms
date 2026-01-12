@@ -97,9 +97,7 @@ class ModelFactory:
     def _create_random_embeddings(
         self, vocab_size: int, embedding_dim: int
     ) -> nn.Embedding:
-        embedding_layer = nn.Embedding(vocab_size, embedding_dim)
-        nn.init.normal_(embedding_layer.weight.data, mean=0.0, std=0.1)
-        return embedding_layer
+        return nn.Embedding(vocab_size, embedding_dim)
 
     def _get_output_dim(self, cfg_task, cfg_model, dataset_bundle) -> int:
         if cfg_task.name == "language_modeling":
