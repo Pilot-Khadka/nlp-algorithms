@@ -180,28 +180,62 @@ class LanguageModelingTask(BaseTask):
         else:
             valid_progress = valid_loader
 
+        hidden: Optional[Union[Tensor, List[Tensor], Tuple[Tensor, ...]]] = None
+        cell: Optional[Union[Tensor, List[Tensor], Tuple[Tensor, ...]]] = None
+        forward_params = inspect.signature(model.forward).parameters
+        accepts_hidden = "hidden" in forward_params
+        accepts_cell = "cell" in forward_params
+
         with torch.no_grad():
             for batch_idx, batch in enumerate(valid_progress):
                 inputs, targets = batch
                 inputs, targets = inputs.to(device), targets.to(device)
 
-                outputs = model(inputs)
+                forward_kwargs = {}
+                if accepts_hidden and hidden is not None:
+                    forward_kwargs["hidden"] = hidden
+                if accepts_cell and cell is not None:
+                    forward_kwargs["cell"] = cell
+
+                outputs = model(inputs, **forward_kwargs)
 
                 if isinstance(outputs, tuple):
-                    outputs = outputs[0]
+                    logits, state = outputs
 
-                if torch.isnan(outputs).any() or torch.isinf(outputs).any():
+                    if isinstance(state, tuple):
+                        hidden, cell = state
+                    else:
+                        hidden = state
+                        cell = None
+                else:
+                    logits = outputs
+                    hidden, cell = None, None
+
+                if hidden is not None:
+                    hidden = (
+                        [h.detach() for h in hidden]
+                        if isinstance(hidden, list)
+                        else hidden.detach()
+                    )
+                if cell is not None:
+                    cell = (
+                        [c.detach() for c in cell]
+                        if isinstance(cell, list)
+                        else cell.detach()
+                    )
+
+                if torch.isnan(logits).any() or torch.isinf(logits).any():
                     raise ValueError(
                         "Model produced NaN or Inf logits during evaluation"
                     )
 
-                loss = criterion(outputs.view(-1, outputs.size(-1)), targets.view(-1))
+                loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
                 loss_value = loss.item()
                 total_valid_loss += loss_value
 
                 context = {
                     "loss": loss_value,
-                    "outputs": outputs,
+                    "outputs": logits,
                     "targets": targets,
                 }
 
