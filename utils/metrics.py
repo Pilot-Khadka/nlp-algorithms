@@ -1,8 +1,17 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any, TypedDict
 
 
 import torch
+from torch import Tensor
+
 from collections import defaultdict
+
+
+class MetricContext(TypedDict):
+    loss: float
+    outputs: Tensor
+    predictions: Tensor
+    targets: Tensor
 
 
 class MetricsTracker:
@@ -81,3 +90,76 @@ def ppl_to_loss_ratio(outputs, targets, computed_metrics=None):
     ):
         return computed_metrics["perplexity"] / computed_metrics["loss"]
     return None
+
+
+def accuracy(context: MetricContext) -> float:
+    predictions = context.get("predictions")
+    targets = context.get("targets")
+    assert targets is not None
+
+    if predictions is None:
+        # if predictions not pre-computed, get from outputs
+        outputs = context["outputs"]
+        predictions = torch.argmax(outputs, dim=1)
+
+    correct = (predictions == targets).sum().item()
+    total = targets.size(0)
+    return correct / total if total > 0 else 0.0
+
+
+def precision(context: MetricContext) -> float:
+    predictions = context.get("predictions")
+    targets = context.get("targets")
+
+    if predictions is None:
+        outputs = context["outputs"]
+        predictions = torch.argmax(outputs, dim=1)
+
+    true_positives = ((predictions == 1) & (targets == 1)).sum().item()
+    predicted_positives = (predictions == 1).sum().item()
+
+    return true_positives / predicted_positives if predicted_positives > 0 else 0.0
+
+
+def recall(context: MetricContext) -> float:
+    predictions = context.get("predictions")
+    targets = context.get("targets")
+
+    if predictions is None:
+        outputs = context["outputs"]
+        predictions = torch.argmax(outputs, dim=1)
+
+    true_positives = ((predictions == 1) & (targets == 1)).sum().item()
+    actual_positives = (targets == 1).sum().item()
+
+    return true_positives / actual_positives if actual_positives > 0 else 0.0
+
+
+def f1_score(context) -> float:
+    prec = precision(context)
+    rec = recall(context)
+
+    if prec + rec == 0:
+        return 0.0
+
+    return 2 * (prec * rec) / (prec + rec)
+
+
+def balanced_accuracy(context) -> float:
+    """average of per-class accuracies"""
+    predictions = context.get("predictions")
+    targets = context.get("targets")
+
+    if predictions is None:
+        outputs = context["outputs"]
+        predictions = torch.argmax(outputs, dim=1)
+
+    neg_correct = ((predictions == 0) & (targets == 0)).sum().item()
+    neg_total = (targets == 0).sum().item()
+    neg_acc = neg_correct / neg_total if neg_total > 0 else 0.0
+
+    pos_correct = ((predictions == 1) & (targets == 1)).sum().item()
+    pos_total = (targets == 1).sum().item()
+    pos_acc = pos_correct / pos_total if pos_total > 0 else 0.0
+
+    return (neg_acc + pos_acc) / 2

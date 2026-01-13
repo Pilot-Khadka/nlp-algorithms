@@ -235,12 +235,16 @@ def parse_args():
     return parser.parse_args()
 
 def main():
+    # pyrefly: ignore [missing-attribute]
     evaluator = CoQAEvaluator(OPTS.data_file)
 
+    # pyrefly: ignore [missing-attribute]
     if OPTS.human:
         print(json.dumps(evaluator.human_performance(), indent=2))
 
+    # pyrefly: ignore [missing-attribute]
     if OPTS.pred_file:
+        # pyrefly: ignore [no-matching-overload]
         with open(OPTS.pred_file) as f:
             pred_data = CoQAEvaluator.preds_to_dict(OPTS.pred_file)
         print(json.dumps(evaluator.model_performance(pred_data), indent=2))

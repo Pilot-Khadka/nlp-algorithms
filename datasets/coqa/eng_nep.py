@@ -5,6 +5,7 @@ https://github.com/Helsinki-NLP/Tatoeba-Challenge/tree/master/data
 
 import torch
 from torch.utils.data import Dataset, DataLoader
+# pyrefly: ignore [missing-import]
 import sentencepiece as spm
 
 
@@ -36,6 +37,7 @@ class TranslationDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
+    # pyrefly: ignore [bad-param-name-override]
     def __getitem__(self, idx):
         return self.data[idx]
 
@@ -67,6 +69,7 @@ if __name__ == "__main__":
     )
 
     pad_id = sp.pad_id()
+    # pyrefly: ignore [bad-argument-count]
     dataset = TranslationDataset(train_data, sp, pad_id)
     dataloader = DataLoader(
         dataset, batch_size=32, shuffle=True, collate_fn=dataset.collate_fn

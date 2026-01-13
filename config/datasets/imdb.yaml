@@ -1,5 +1,4 @@
 name: imdb
-sequence_length: 100
 data_dir: datasets/dataset_imdb/
 url: http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz
 archive_name: aclImdb_v1.tar.gz

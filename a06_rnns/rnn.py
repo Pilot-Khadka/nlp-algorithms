@@ -154,9 +154,7 @@ class RNN(nn.Module):
             hidden = self.init_hidden(batch_size, x.device, x.dtype)
 
         rnn_out, new_hidden = self._rnn_forward_impl(x, hidden)
-
         output = self.h2o(self.dropout(rnn_out))
-
         self._hidden = new_hidden.detach()
         return output, new_hidden
 
