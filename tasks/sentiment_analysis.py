@@ -1,7 +1,5 @@
-from typing import Dict, Any, Union, cast, Optional, Tuple
-from torch import Tensor
+from typing import Dict, Any, Union, cast, Tuple
 
-import inspect
 from tqdm import tqdm
 
 import torch
@@ -22,58 +20,6 @@ class SentimentAnalysisTask(BaseTask):
 
     def get_loss_fn(self, pad_idx=0):
         return nn.CrossEntropyLoss()
-
-    def on_epoch_start(self, model, training: bool = True) -> None:
-        if hasattr(model, "reset_state"):
-            model.reset_state()
-
-    def on_epoch_end(self, model, training: bool = True) -> None:
-        pass
-
-    def _detach_hidden(self, hidden):
-        if hidden is None:
-            return None
-        if isinstance(hidden, Tensor):
-            return hidden.detach()
-        elif isinstance(hidden, list):
-            return [self._detach_hidden(h) for h in hidden]
-        elif isinstance(hidden, tuple):
-            return tuple(self._detach_hidden(h) for h in hidden)
-        return hidden
-
-    def _reset_hidden_for_new_docs(
-        self,
-        hidden,
-        is_first_chunk: Tensor,
-        batch_size: int,
-    ):
-        """
-           For samples that are starting a new document.
-
-        Args:
-        :hidden: Current hidden state (num_layers, batch, hidden_size) or tuple for LSTM
-        :is_first_chunk: Boolean tensor (batch_size,) indicating new documents
-        :batch_size: Current batch size
-        """
-        if hidden is None:
-            return None
-
-        if isinstance(hidden, tuple):
-            # LSTM: (h, c)
-            return tuple(
-                self._reset_hidden_for_new_docs(h, is_first_chunk, batch_size)
-                for h in hidden
-            )
-
-        # hidden shape: (num_layers, batch, hidden_size)
-        if hidden.size(1) != batch_size:
-            # batch size changed, return None to reinitialize
-            return None
-
-        mask = is_first_chunk.unsqueeze(0).unsqueeze(-1)
-        hidden = hidden * (~mask).float()
-
-        return hidden
 
     def train_one_epoch(
         self,
@@ -96,8 +42,6 @@ class SentimentAnalysisTask(BaseTask):
             ):
                 train_loader.sampler.set_epoch(epoch)
 
-        self.on_epoch_start(model, training=True)
-
         total_train_loss = 0.0
         total_samples = 0
         correct_predictions = 0
@@ -112,79 +56,47 @@ class SentimentAnalysisTask(BaseTask):
         else:
             train_progress = train_loader
 
-        hidden: Optional[Union[Tensor, Tuple[Tensor, ...]]] = None
-
-        forward_params = inspect.signature(model.forward).parameters
-        accepts_hidden = "hidden" in forward_params
-
-        for batch_idx, batch in enumerate(train_progress):
-            input_ids = batch["input_ids"].to(device)
-            labels = batch["labels"].to(device)
-            is_first_chunk = batch["is_first_chunk"].to(device)
-            is_last_chunk = batch["is_last_chunk"].to(device)
-
-            batch_size = input_ids.size(0)
-
-            hidden = self._detach_hidden(hidden)
-            hidden = self._reset_hidden_for_new_docs(hidden, is_first_chunk, batch_size)
+        for batch in train_progress:
+            inputs, labels, *others = batch
+            batch_size = inputs.size(0)
 
             optimizer.zero_grad()
-
-            forward_kwargs = {}
-            if accepts_hidden and hidden is not None:
-                forward_kwargs["hidden"] = hidden
-
-            outputs = model(input_ids, **forward_kwargs)
+            outputs = model(inputs)
 
             if isinstance(outputs, tuple):
-                logits, new_hidden = outputs
-                hidden = new_hidden
+                logits = outputs[0]
             else:
                 logits = outputs
-                hidden = None
 
-            # For chunked sequences, we only compute loss on the last chunk
-            # This is because the label applies to the full document
-            last_chunk_mask = is_last_chunk
+            if logits.dim() == 3:
+                logits = logits[:, -1, :]
 
-            if last_chunk_mask.any():
-                last_chunk_logits = logits[last_chunk_mask]
-                last_chunk_labels = labels[last_chunk_mask]
+            loss = criterion(logits, labels)
 
-                loss = criterion(last_chunk_logits, last_chunk_labels)
-                num_complete = last_chunk_mask.sum().item()
-                predictions = torch.argmax(last_chunk_logits, dim=1)
-                correct = (predictions == last_chunk_labels).sum().item()
+            loss.backward()
 
-                loss.backward()
+            if grad_clip:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
 
-                if grad_clip:
-                    torch.nn.utils.clip_grad_norm_(
-                        model.parameters(), max_norm=grad_clip
-                    )
+            optimizer.step()
 
-                optimizer.step()
+            predictions = torch.argmax(logits, dim=1)
+            correct = (predictions == labels).sum().item()
 
-                total_train_loss += loss.item() * num_complete
-                total_samples += num_complete
-                correct_predictions += correct
-            else:
-                # no complete documents in this batch, still need forward for hidden states
-                # no loss computation or optimizer step
-                pass
+            total_train_loss += loss.detach() * batch_size
+            total_samples += batch_size
+            correct_predictions += correct
 
-            if is_main and hasattr(train_progress, "set_postfix") and total_samples > 0:
+            if is_main and hasattr(train_progress, "set_postfix"):
                 avg_loss = total_train_loss / total_samples
                 avg_acc = correct_predictions / total_samples
                 cast(tqdm, train_progress).set_postfix(
                     {
-                        "Loss": f"{loss.item() if last_chunk_mask.any() else 0:.4f}",  # pyrefly: ignore
+                        "Loss": f"{loss.item():.4f}",
                         "Avg Loss": f"{avg_loss:.4f}",
                         "Acc": f"{avg_acc:.4f}",
                     }
                 )
-
-        self.on_epoch_end(model, training=True)
 
         avg_train_loss = total_train_loss / total_samples if total_samples > 0 else 0.0
 
@@ -215,8 +127,6 @@ class SentimentAnalysisTask(BaseTask):
         total_samples = 0
         metrics_tracker.reset()
 
-        self.on_epoch_start(model, training=False)
-
         valid_progress: Union[Any, tqdm]
         if is_main:
             valid_progress = tqdm(
@@ -227,85 +137,59 @@ class SentimentAnalysisTask(BaseTask):
         else:
             valid_progress = valid_loader
 
-        hidden: Optional[Union[Tensor, Tuple[Tensor, ...]]] = None
-
-        forward_params = inspect.signature(model.forward).parameters
-        accepts_hidden = "hidden" in forward_params
-
         with torch.no_grad():
-            for batch_idx, batch in enumerate(valid_progress):
+            for batch in valid_progress:
                 input_ids = batch["input_ids"].to(device)
                 labels = batch["labels"].to(device)
-                is_first_chunk = batch["is_first_chunk"].to(device)
-                is_last_chunk = batch["is_last_chunk"].to(device)
-
                 batch_size = input_ids.size(0)
 
-                hidden = self._reset_hidden_for_new_docs(
-                    hidden, is_first_chunk, batch_size
-                )
-
-                forward_kwargs = {}
-                if accepts_hidden and hidden is not None:
-                    forward_kwargs["hidden"] = hidden
-
-                outputs = model(input_ids, **forward_kwargs)
+                outputs = model(input_ids)
 
                 if isinstance(outputs, tuple):
-                    logits, new_hidden = outputs
-                    hidden = new_hidden
+                    logits = outputs[0]
                 else:
                     logits = outputs
-                    hidden = None
+
+                if logits.dim() == 3:
+                    logits = logits[:, -1, :]
 
                 if torch.isnan(logits).any() or torch.isinf(logits).any():
                     raise ValueError(
                         "Model produced NaN or Inf logits during evaluation"
                     )
 
-                last_chunk_mask = is_last_chunk
+                loss = criterion(logits, labels)
+                loss_value = loss.item()
 
-                if last_chunk_mask.any():
-                    last_chunk_logits = logits[last_chunk_mask]
-                    last_chunk_labels = labels[last_chunk_mask]
+                total_valid_loss += loss_value * batch_size
+                total_samples += batch_size
 
-                    loss = criterion(last_chunk_logits, last_chunk_labels)
-                    loss_value = loss.item()
+                predictions = torch.argmax(logits, dim=1)
 
-                    num_complete = last_chunk_mask.sum().item()
-                    total_valid_loss += loss_value * num_complete
-                    total_samples += num_complete
+                context = {
+                    "loss": loss_value,
+                    "outputs": logits,
+                    "predictions": predictions,
+                    "targets": labels,
+                }
 
-                    predictions = torch.argmax(last_chunk_logits, dim=1)
+                batch_metrics = {"loss": loss_value}
+                for name in metrics_tracker.metric_names:
+                    if hasattr(sa_metrics, name):
+                        func = getattr(sa_metrics, name)
+                        batch_metrics[name] = func(context)
 
-                    context = {
-                        "loss": loss_value,
-                        "outputs": last_chunk_logits,
-                        "predictions": predictions,
-                        "targets": last_chunk_labels,
+                metrics_tracker.update(batch_metrics, batch_size)
+
+                if is_main and hasattr(valid_progress, "set_postfix"):
+                    current_metrics = metrics_tracker.get_averages()
+                    avg_loss = total_valid_loss / total_samples
+                    postfix = {
+                        "Val Loss": f"{loss_value:.4f}",
+                        "Avg Val Loss": f"{avg_loss:.4f}",
                     }
-
-                    batch_metrics = {"loss": loss_value}
-                    for name in metrics_tracker.metric_names:
-                        if hasattr(sa_metrics, name):
-                            func = getattr(sa_metrics, name)
-                            batch_metrics[name] = func(context)
-
-                    metrics_tracker.update(batch_metrics, num_complete)
-
-                    if is_main and hasattr(valid_progress, "set_postfix"):
-                        current_metrics = metrics_tracker.get_averages()
-                        avg_loss = total_valid_loss / total_samples
-                        postfix = {
-                            "Val Loss": f"{loss_value:.4f}",
-                            "Avg Val Loss": f"{avg_loss:.4f}",
-                        }
-                        postfix.update(
-                            {k: f"{v:.4f}" for k, v in current_metrics.items()}
-                        )
-                        cast(tqdm, valid_progress).set_postfix(postfix)
-
-        self.on_epoch_end(model, training=False)
+                    postfix.update({k: f"{v:.4f}" for k, v in current_metrics.items()})
+                    cast(tqdm, valid_progress).set_postfix(postfix)
 
         avg_valid_loss = total_valid_loss / total_samples if total_samples > 0 else 0.0
 

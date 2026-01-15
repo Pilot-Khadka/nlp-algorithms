@@ -150,6 +150,7 @@ def train_single_gpu(cfg, gpu_id: int = 0):
         dataset_bundle,
         task,
     )
+    print(model)
 
     if cfg.get("train", {}).get("compile_model", False):
         print("Compiling the model ....")

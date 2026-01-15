@@ -38,7 +38,7 @@ class LSTM(nn.Module):
         embed_dropout: float = 0.1,
         recurrent_dropout: float = 0.25,
         output_dropout: float = 0.5,
-        tie_weights: bool = True,
+        weight_tying: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -46,11 +46,14 @@ class LSTM(nn.Module):
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
         self.num_layers = num_layers
-        self.tie_weights = tie_weights
+        self.weight_tying = weight_tying
 
         self.embedding = kwargs.get("embedding_layer", None)
-        if self.embedding is None:
-            self.embedding = nn.Embedding(output_dim, input_dim)
+        assert self.embedding is not None
+        # if self.embedding is None:
+        #     self.embedding = nn.Embedding(vocab_size, input_dim)
+        print("embedding weight shape:", self.embedding.weight.shape)
+
         assert self.embedding is not None
         self.embed_dropout = WordDropout(embed_dropout)
 
@@ -80,7 +83,7 @@ class LSTM(nn.Module):
 
     def _setup_output_layers(self):
         assert self.embedding is not None
-        if self.tie_weights:
+        if self.weight_tying:
             if self.hidden_dim == self.input_dim:
                 self.proj = None
                 self.fc = nn.Linear(self.hidden_dim, self.output_dim)

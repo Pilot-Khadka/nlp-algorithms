@@ -5,8 +5,7 @@ import shutil
 from collections import Counter
 
 import torch
-from torch.utils.data import DataLoader, Dataset
-from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import Dataset, DataLoader
 
 from datasets.base import DatasetBundle
 from datasets.base import DatasetUtils
@@ -19,89 +18,127 @@ class IMDBDataset(Dataset):
         self.archive_name = cfg.datasets["archive_name"]
         self.extract_name = self.archive_name.split(".")[0].replace("_v1", "")
         self.split = split
+
         self.min_freq = cfg.datasets.get("min_freq", 1)
-        self.max_seq_len = cfg.datasets.get("max_seq_len", None)
+        self.max_seq_len = cfg.datasets.get("max_seq_len", 256)
 
         self.prepare_data()
-        self.texts, self.labels = self.load_raw_data()
+        texts, labels = self.load_raw_data()
 
         if vocab is None and split == "train":
-            self.vocab = self.build_vocab(self.texts)
+            self.vocab = self.build_vocab(texts)
         elif vocab is not None:
             self.vocab = vocab
         else:
             raise ValueError(
-                "Vocabulary must be provided for non-train splits or build from train split first"
+                "Vocabulary must be provided for non-train splits "
+                "or build from train split first"
             )
 
-        self.samples = self._prepare_samples()
+        self.inputs, self.labels, self.doc_ids, self.chunk_ids = self._encode_and_chunk(
+            texts, labels
+        )
 
-    def _prepare_samples(self) -> List[Dict[str, Any]]:
-        """
-        :token_ids: List[int]
-        :label: int
-        :doc_id: int (original document index)
-        :chunk_id: int (chunk index within document)
-        :is_first_chunk: bool
-        :is_last_chunk: bool
-        """
-        samples = []
+        self._on_gpu = False
 
-        for doc_id, (text, label) in enumerate(zip(self.texts, self.labels)):
+    def move_to_device(self, device: torch.device):
+        if not self._on_gpu or self.inputs.device != device:
+            self.inputs = self.inputs.to(device, non_blocking=True)
+            self.labels = self.labels.to(device, non_blocking=True)
+            self.doc_ids = self.doc_ids.to(device, non_blocking=True)
+            self.chunk_ids = self.chunk_ids.to(device, non_blocking=True)
+            self._on_gpu = True
+
+            self.inputs = self.inputs.contiguous()
+            self.labels = self.labels.contiguous()
+            self.doc_ids = self.doc_ids.contiguous()
+            self.chunk_ids = self.chunk_ids.contiguous()
+
+    def shuffle_inplace(self):
+        perm = torch.randperm(len(self), device=self.inputs.device)
+        self.inputs = self.inputs[perm]
+        self.labels = self.labels[perm]
+        self.doc_ids = self.doc_ids[perm]
+        self.chunk_ids = self.chunk_ids[perm]
+
+    def _encode_and_chunk(
+        self, texts: List[str], labels: List[int]
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        - Tokenize + numericalize once
+        - Chunk long docs into fixed-size segments
+        - Pre-allocate tensors for speed
+        - Pre-pad so we avoid per-batch pad_sequence
+        """
+        vocab_get = self.vocab.get
+        unk_id = self.vocab["<unk>"]
+        pad_id = self.vocab["<pad>"]
+        max_len = self.max_seq_len
+
+        total_chunks = 0
+        chunk_counts = []
+        tokenized_texts = []
+
+        for text in texts:
             tokens = self.tokenize(text)
-            token_ids = [self.vocab.get(token, self.vocab["<unk>"]) for token in tokens]
+            tokenized_texts.append(tokens)
+            num_chunks = max(1, (len(tokens) + max_len - 1) // max_len)
+            chunk_counts.append(num_chunks)
+            total_chunks += num_chunks
 
-            if self.max_seq_len is None or len(token_ids) <= self.max_seq_len:
-                samples.append(
-                    {
-                        "token_ids": token_ids,
-                        "label": label,
-                        "doc_id": doc_id,
-                        "chunk_id": 0,
-                        "is_first_chunk": True,
-                        "is_last_chunk": True,
-                        "num_chunks": 1,
-                    }
+        inputs_tensor = torch.full((total_chunks, max_len), pad_id, dtype=torch.long)
+        labels_tensor = torch.zeros(total_chunks, dtype=torch.long)
+        doc_ids_tensor = torch.zeros(total_chunks, dtype=torch.long)
+        chunk_ids_tensor = torch.zeros(total_chunks, dtype=torch.long)
+
+        write_idx = 0
+        for doc_id, (tokens, label, num_chunks) in enumerate(
+            zip(tokenized_texts, labels, chunk_counts)
+        ):
+            token_ids = [vocab_get(tok, unk_id) for tok in tokens]
+
+            for chunk_id in range(num_chunks):
+                start = chunk_id * max_len
+                end = min(start + max_len, len(token_ids))
+                chunk = token_ids[start:end]
+
+                chunk_len = len(chunk)
+                inputs_tensor[write_idx, :chunk_len] = torch.tensor(
+                    chunk, dtype=torch.long
                 )
-            else:
-                chunks = [
-                    token_ids[i : i + self.max_seq_len]
-                    for i in range(0, len(token_ids), self.max_seq_len)
-                ]
-                num_chunks = len(chunks)
 
-                for chunk_id, chunk in enumerate(chunks):
-                    samples.append(
-                        {
-                            "token_ids": chunk,
-                            "label": label,
-                            "doc_id": doc_id,
-                            "chunk_id": chunk_id,
-                            "is_first_chunk": chunk_id == 0,
-                            "is_last_chunk": chunk_id == num_chunks - 1,
-                            "num_chunks": num_chunks,
-                        }
-                    )
+                labels_tensor[write_idx] = label
+                doc_ids_tensor[write_idx] = doc_id
+                chunk_ids_tensor[write_idx] = chunk_id
+                write_idx += 1
 
-        return samples
+        return inputs_tensor, labels_tensor, doc_ids_tensor, chunk_ids_tensor
 
     def __len__(self) -> int:
-        return len(self.samples)
+        return self.inputs.size(0)
 
-    def __getitem__(self, index: int) -> Dict[str, Any]:
-        return self.samples[index]
+    def __getitem__(
+        self, index: int
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        return (
+            self.inputs[index],
+            self.labels[index],
+            self.doc_ids[index],
+            self.chunk_ids[index],
+        )
 
     def get_special_tokens(self) -> Dict[str, int]:
         return {"<pad>": 0, "<unk>": 1}
 
     def tokenize(self, text: str) -> List[str]:
-        return text.lower().split()
+        """tokenization with explicit split"""
+        text_lower = text.lower()
+        return text_lower.split(" ")
 
     def build_vocab(self, texts: List[str]) -> Dict[str, int]:
         counter: Counter[str] = Counter()
         for text in texts:
-            tokens = self.tokenize(text)
-            counter.update(tokens)
+            counter.update(self.tokenize(text))
 
         vocab = self.get_special_tokens()
         idx = len(vocab)
@@ -131,8 +168,7 @@ class IMDBDataset(Dataset):
         extract_name = self.extract_name
         final_archive = os.path.join(self.data_dir, archive_filename)
         extract_path = os.path.join(self.data_dir, extract_name)
-
-        temp_archive = archive_filename + ".tmp"
+        temp_archive = final_archive + ".tmp"
 
         try:
             if not os.path.exists(final_archive):
@@ -195,55 +231,46 @@ class IMDBDataset(Dataset):
         return 2
 
 
-def collate_batch(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-    """
-    collaet function preserving chunk information.
-    """
-    token_ids = [
-        torch.tensor(sample["token_ids"], dtype=torch.long) for sample in batch
-    ]
-    labels = torch.tensor([sample["label"] for sample in batch], dtype=torch.long)
-    doc_ids = torch.tensor([sample["doc_id"] for sample in batch], dtype=torch.long)
-    chunk_ids = torch.tensor([sample["chunk_id"] for sample in batch], dtype=torch.long)
-    is_first_chunk = torch.tensor(
-        [sample["is_first_chunk"] for sample in batch], dtype=torch.bool
-    )
-    is_last_chunk = torch.tensor(
-        [sample["is_last_chunk"] for sample in batch], dtype=torch.bool
-    )
+def collate_tuple(batch: List[Tuple[torch.Tensor, ...]]) -> Tuple[torch.Tensor, ...]:
+    input_ids = torch.stack([b[0] for b in batch], dim=0)
+    labels = torch.stack([b[1] for b in batch], dim=0)
+    doc_ids = torch.stack([b[2] for b in batch], dim=0)
+    chunk_ids = torch.stack([b[3] for b in batch], dim=0)
 
-    padded_tokens = pad_sequence(token_ids, batch_first=True, padding_value=0)
-    lengths = torch.tensor([len(t) for t in token_ids], dtype=torch.long)
-
-    return {
-        "input_ids": padded_tokens,
-        "labels": labels,
-        "lengths": lengths,
-        "doc_ids": doc_ids,
-        "chunk_ids": chunk_ids,
-        "is_first_chunk": is_first_chunk,
-        "is_last_chunk": is_last_chunk,
-    }
+    return input_ids, labels, doc_ids, chunk_ids
 
 
 def get_imdb_dataloaders(cfg):
     batch_size = cfg.train.batch_size
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     train_dataset = IMDBDataset(cfg, split="train")
     vocab = train_dataset.get_vocab()
     test_dataset = IMDBDataset(cfg, split="test", vocab=vocab)
 
-    # For chunked data, we should NOT shuffle to keep chunks in order
-    shuffle_train = cfg.datasets.get("max_seq_len") is None
+    print(f"Moving datasets to {device}...")
+    train_dataset.move_to_device(device)
+    test_dataset.move_to_device(device)
+
+    print("Shuffling training data...")
+    train_dataset.shuffle_inplace()
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=shuffle_train,
-        collate_fn=collate_batch,
+        shuffle=False,
+        collate_fn=collate_tuple,
+        num_workers=0,
+        pin_memory=False,
     )
+
     test_loader = DataLoader(
-        test_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_batch
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=collate_tuple,
+        num_workers=0,
+        pin_memory=False,
     )
 
     return DatasetBundle(train_loader, test_loader, test_loader, vocab=vocab)

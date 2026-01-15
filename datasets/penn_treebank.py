@@ -1,234 +1,252 @@
-from typing import Dict, Optional, List, Tuple, Iterator
+from typing import Dict, Any, Optional, Tuple, List
 
 import os
-import requests
-import numpy as np
-from tqdm import tqdm
+import shutil
 from collections import Counter
 
 import torch
+from torch.utils.data import Dataset, DataLoader
 
 from datasets.base import DatasetBundle
-from models.model_registry import load_vocab
+from datasets.base import DatasetUtils
+from utils.utils import get_num_workers
 
 
-class PTBCorpus:
+class IMDBDataset(Dataset):
     def __init__(self, cfg, split: str, vocab: Optional[Dict[str, int]] = None):
         self.data_dir = cfg.datasets["data_dir"]
-        self.seq_len = cfg.datasets["sequence_length"]
+        self.dataset_url = cfg.datasets["url"]
+        self.archive_name = cfg.datasets["archive_name"]
+        self.extract_name = self.archive_name.split(".")[0].replace("_v1", "")
         self.split = split
-        self.use_pretrained_embedding = cfg.models.get(
-            "use_pretrained_embedding", False
-        )
 
-        if not os.path.exists(self.data_dir):
-            self.urls = {
-                split_name: cfg.datasets[f"{split_name}_url"]
-                for split_name in ["train", "valid", "test"]
-            }
-            self._download_ptb()
+        self.min_freq = cfg.datasets.get("min_freq", 1)
+        self.max_seq_len = cfg.datasets.get("max_seq_len", 256)
 
-        tokens = self._load_tokens()
+        self.prepare_data()
+        texts, labels = self.load_raw_data()
 
-        if vocab is None:
-            if split != "train":
-                raise ValueError("Vocabulary must be built from the train split")
-
-            if self.use_pretrained_embedding:
-                pretrained_vocab = load_vocab(cfg.model.get("vocab_path"))
-                self.vocab = self._add_special_tokens(pretrained_vocab)
-            else:
-                self.vocab = self._build_vocab(tokens)
-        else:
+        if vocab is None and split == "train":
+            self.vocab = self.build_vocab(texts)
+        elif vocab is not None:
             self.vocab = vocab
+        else:
+            raise ValueError(
+                "Vocabulary must be provided for non-train splits "
+                "or build from train split first"
+            )
 
-        self.data = self._encode_tokens(tokens)
-
-    def _load_tokens(self) -> List[str]:
-        file_path = os.path.join(self.data_dir, f"{self.split}.txt")
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.read().replace("\n", " <eos> ").split()
-
-    def _encode_tokens(self, tokens: List[str]) -> torch.Tensor:
-        unk_idx = self.vocab["<unk>"]
-        vocab_get = self.vocab.get
-        encoded = np.fromiter(
-            (vocab_get(t, unk_idx) for t in tokens),
-            dtype=np.int64,
-            count=len(tokens),
+        self.inputs, self.labels, self.doc_ids, self.chunk_ids = self._encode_and_chunk(
+            texts, labels
         )
-        return torch.from_numpy(encoded)
 
-    def _build_vocab(self, tokens: List[str], min_freq: int = 1) -> Dict[str, int]:
-        counter = Counter(tokens)
-        vocab = {"<pad>": 0, "<unk>": 1}
-        idx = 2
-        for token, freq in counter.items():
-            if freq >= min_freq and token not in vocab:
-                vocab[token] = idx
+    def _encode_and_chunk(
+        self, texts: List[str], labels: List[int]
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        - Tokenize + numericalize once
+        - Chunk long docs into fixed-size segments
+        - Pre-pad so we avoid per-batch pad_sequence
+        Returns:
+            inputs:  (N, max_seq_len) int64
+            labels:  (N,) int64
+            doc_ids: (N,) int64
+            chunk_ids: (N,) int64
+        """
+        vocab_get = self.vocab.get
+        unk_id = self.vocab["<unk>"]
+        pad_id = self.vocab["<pad>"]
+        max_len = self.max_seq_len
+
+        all_inputs = []
+        all_labels = []
+        all_doc_ids = []
+        all_chunk_ids = []
+
+        for doc_id, (text, label) in enumerate(zip(texts, labels)):
+            tokens = self.tokenize(text)
+            token_ids = [vocab_get(tok, unk_id) for tok in tokens]
+
+            if max_len is None:
+                chunks = [token_ids]
+            else:
+                chunks = [
+                    token_ids[i : i + max_len]
+                    for i in range(0, len(token_ids), max_len)
+                ]
+
+            for chunk_id, chunk in enumerate(chunks):
+                if max_len is not None:
+                    if len(chunk) < max_len:
+                        chunk = chunk + [pad_id] * (max_len - len(chunk))
+                    elif len(chunk) > max_len:
+                        chunk = chunk[:max_len]
+
+                all_inputs.append(chunk)
+                all_labels.append(label)
+                all_doc_ids.append(doc_id)
+                all_chunk_ids.append(chunk_id)
+
+        inputs_tensor = torch.tensor(all_inputs, dtype=torch.long)  # (N, L)
+        labels_tensor = torch.tensor(all_labels, dtype=torch.long)  # (N,)
+        doc_ids_tensor = torch.tensor(all_doc_ids, dtype=torch.long)  # (N,)
+        chunk_ids_tensor = torch.tensor(all_chunk_ids, dtype=torch.long)  # (N,)
+
+        return inputs_tensor, labels_tensor, doc_ids_tensor, chunk_ids_tensor
+
+    def __len__(self) -> int:
+        return self.inputs.size(0)
+
+    def __getitem__(self, index: int) -> Dict[str, Any]:
+        return {
+            "input_ids": self.inputs[index],
+            "labels": self.labels[index],
+            "doc_ids": self.doc_ids[index],
+            "chunk_ids": self.chunk_ids[index],
+        }
+
+    def get_special_tokens(self) -> Dict[str, int]:
+        return {"<pad>": 0, "<unk>": 1}
+
+    def tokenize(self, text: str) -> List[str]:
+        return text.lower().split()
+
+    def build_vocab(self, texts: List[str]) -> Dict[str, int]:
+        counter: Counter[str] = Counter()
+        for text in texts:
+            counter.update(self.tokenize(text))
+
+        vocab = self.get_special_tokens()
+        idx = len(vocab)
+
+        for word, freq in counter.items():
+            if freq >= self.min_freq and word not in vocab:
+                vocab[word] = idx
                 idx += 1
+
         return vocab
 
-    def _add_special_tokens(self, pretrained_vocab: Dict) -> Dict[str, int]:
-        special_tokens = ["<pad>", "<unk>", "<eos>"]
-        word2idx = pretrained_vocab["word2idx"].copy()
-        idx2word = pretrained_vocab["idx2word"].copy()
-        word_freq = pretrained_vocab.get("word_freq", [])
+    def prepare_data(self):
+        extract_path = os.path.join(self.data_dir, self.extract_name)
 
-        max_idx = max(word2idx.values()) if word2idx else -1
-        next_idx = max_idx + 1
+        if os.path.exists(extract_path) and self._is_complete_extraction(extract_path):
+            return
 
-        for token in special_tokens:
-            if token not in word2idx:
-                word2idx[token] = next_idx
-                idx2word[next_idx] = token
-                if isinstance(word_freq, dict):
-                    word_freq[token] = 1
-                elif isinstance(word_freq, list):
-                    while len(word_freq) <= next_idx:
-                        word_freq.append(1)
-                    word_freq[next_idx] = 1
-                print(f"Added special token '{token}' with index {next_idx}")
-                next_idx += 1
-        return word2idx
+        if not os.path.exists(self.data_dir):
+            os.makedirs(self.data_dir)
+
+        self._download_and_extract()
+
+    def _download_and_extract(self):
+        import tarfile
+
+        archive_filename = self.archive_name
+        extract_name = self.extract_name
+        final_archive = os.path.join(self.data_dir, archive_filename)
+        extract_path = os.path.join(self.data_dir, extract_name)
+        temp_archive = final_archive + ".tmp"
+
+        try:
+            if not os.path.exists(final_archive):
+                print("Downloading IMDb dataset...")
+                DatasetUtils.download_file(self.dataset_url, temp_archive)
+                DatasetUtils.ensure_dir(self.data_dir)
+                os.rename(temp_archive, final_archive)
+
+            print("Extracting...")
+            with tarfile.open(final_archive, "r:gz") as tar:
+                tar.extractall(path=self.data_dir, filter="data")
+
+            extracted_dir = os.path.join(self.data_dir, "aclImdb")
+            if extracted_dir != extract_path and os.path.exists(extracted_dir):
+                os.rename(extracted_dir, extract_path)
+
+            if os.path.exists(final_archive):
+                os.remove(final_archive)
+
+        except (KeyboardInterrupt, Exception):
+            if os.path.exists(temp_archive):
+                os.remove(temp_archive)
+            if os.path.exists(extract_path) and not self._is_complete_extraction(
+                extract_path
+            ):
+                shutil.rmtree(extract_path, ignore_errors=True)
+            raise
+
+    def _is_complete_extraction(self, path: str) -> bool:
+        for split in ["train", "test"]:
+            split_dir = os.path.join(path, split)
+            if not os.path.exists(split_dir):
+                return False
+            for label_dir in ["pos", "neg"]:
+                if not os.path.exists(os.path.join(split_dir, label_dir)):
+                    return False
+        return True
+
+    def load_raw_data(self) -> Tuple[List[str], List[int]]:
+        split_dir = os.path.join(self.data_dir, self.extract_name, self.split)
+        pos_path = os.path.join(split_dir, "pos")
+        neg_path = os.path.join(split_dir, "neg")
+
+        texts, labels = [], []
+        for label, folder in [(1, pos_path), (0, neg_path)]:
+            for file in sorted(os.listdir(folder)):  # sorted for reproducibility
+                if file.endswith(".txt"):
+                    with open(os.path.join(folder, file), "r", encoding="utf-8") as f:
+                        text = f.read().strip().replace("\n", " ")
+                        texts.append(text)
+                        labels.append(label)
+
+        return texts, labels
 
     def get_vocab(self) -> Dict[str, int]:
         return self.vocab
 
-    def _download_ptb(self):
-        os.makedirs(self.data_dir, exist_ok=True)
-        for split_name, url in self.urls.items():
-            file_path = os.path.join(self.data_dir, f"{split_name}.txt")
-            if not os.path.exists(file_path):
-                print(f"Downloading {split_name}...")
-                response = requests.get(url, stream=True)
-                response.raise_for_status()
-                total_size = int(response.headers.get("content-length", 0))
-                with open(file_path, "w", encoding="utf-8") as f:
-                    with tqdm(
-                        total=total_size,
-                        unit="B",
-                        unit_scale=True,
-                        desc=f"{split_name}.txt",
-                    ) as pbar:
-                        for chunk in response.iter_content(
-                            chunk_size=8192, decode_unicode=True
-                        ):
-                            if chunk:
-                                f.write(chunk)
-                                pbar.update(len(chunk.encode("utf-8")))
-
-    def batchify(
-        self, batch_size: int, device: Optional[torch.device] = None
-    ) -> torch.Tensor:
-        """
-        Reshape flat data into batch_size parallel streams.
-
-        Example with batch_size=3 and data=[0,1,2,3,4,5,6,7,8,9,10,11]:
-            :stream 0: [0, 1, 2, 3]
-            :stream 1: [4, 5, 6, 7]
-            :stream 2: [8, 9, 10, 11]
-
-            :result shape: (4, 3)
-            [[0, 4, 8],
-             [1, 5, 9],
-             [2, 6, 10],
-             [3, 7, 11]]
-        """
-        n_tokens = self.data.size(0)
-        n_batches = n_tokens // batch_size
-
-        data = self.data.narrow(0, 0, n_batches * batch_size)
-        data = data.view(batch_size, -1).t().contiguous()
-
-        if device is not None:
-            data = data.to(device)
-
-        return data
+    @property
+    def num_classes(self) -> int:
+        return 2
 
 
-class PTBIterator:
-    def __init__(
-        self,
-        data: torch.Tensor,
-        seq_len: int,
-        device: Optional[torch.device] = None,
-        batch_first: bool = True,
-    ):
-        """
-        :data: Batchified tensor of shape (num_steps, batch_size)
-        :seq_len: Number of time steps per batch
-        :device: Device to place tensors on
-        :batch_first: If True, return (batch_size, seq_len) instead of (seq_len, batch_size)
-        """
-        self.data = data
-        self.seq_len = seq_len
-        self.device = device
-        self.batch_first = batch_first
-        self.pos = 0
+def collate_fixed(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+    input_ids = torch.stack([b["input_ids"] for b in batch], dim=0)
+    labels = torch.stack([b["labels"] for b in batch], dim=0)
+    doc_ids = torch.stack([b["doc_ids"] for b in batch], dim=0)
+    chunk_ids = torch.stack([b["chunk_ids"] for b in batch], dim=0)
 
-        self.n_steps = data.size(0)
-        self.batch_size = data.size(1)
+    lengths = torch.full((input_ids.size(0),), input_ids.size(1), dtype=torch.long)
 
-    def __iter__(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
-        self.pos = 0
-        return self
-
-    def __next__(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        if self.pos >= self.n_steps - 1:
-            raise StopIteration
-
-        actual_seq_len = min(self.seq_len, self.n_steps - 1 - self.pos)
-
-        x = self.data[self.pos : self.pos + actual_seq_len]
-        y = self.data[self.pos + 1 : self.pos + 1 + actual_seq_len]
-
-        self.pos += actual_seq_len
-
-        if self.device is not None:
-            x = x.to(self.device)
-            y = y.to(self.device)
-
-        if self.batch_first:
-            x = x.t().contiguous()  # (batch_size, seq_len)
-            y = y.t().contiguous()
-
-        return x, y
-
-    def __len__(self) -> int:
-        return (self.n_steps - 1 + self.seq_len - 1) // self.seq_len
-
-    def reset(self):
-        self.pos = 0
+    return {
+        "input_ids": input_ids,
+        "labels": labels,
+        "lengths": lengths,
+        "doc_ids": doc_ids,
+        "chunk_ids": chunk_ids,
+    }
 
 
-def get_ptb_dataloaders(cfg):
+def get_imdb_dataloaders(cfg):
     batch_size = cfg.train.batch_size
-    seq_len = cfg.datasets["sequence_length"]
-    batch_first = cfg.datasets.get("batch_first", True)
 
-    if hasattr(cfg.train, "device"):
-        device = torch.device(cfg.train.device)
-    else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    train_dataset = IMDBDataset(cfg, split="train")
+    vocab = train_dataset.get_vocab()
+    test_dataset = IMDBDataset(cfg, split="test", vocab=vocab)
+    num_workers = get_num_workers(cfg)
 
-    train_corpus = PTBCorpus(cfg, split="train")
-    vocab = train_corpus.get_vocab()
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        collate_fn=collate_fixed,
+        num_workers=num_workers,
+        pin_memory=True,
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=collate_fixed,
+        num_workers=num_workers,
+        pin_memory=True,
+    )
 
-    valid_corpus = PTBCorpus(cfg, split="valid", vocab=vocab)
-    test_corpus = PTBCorpus(cfg, split="test", vocab=vocab)
-
-    train_data = train_corpus.batchify(batch_size, device)
-    valid_data = valid_corpus.batchify(batch_size, device)
-    test_data = test_corpus.batchify(batch_size, device)
-
-    print(f"Train data shape: {train_data.shape}")  # (n_steps, batch_size)
-    print(f"Valid data shape: {valid_data.shape}")
-    print(f"Test data shape: {test_data.shape}")
-    print(f"Vocab size: {len(vocab)}")
-
-    train_iter = PTBIterator(train_data, seq_len, device, batch_first)
-    valid_iter = PTBIterator(valid_data, seq_len, device, batch_first)
-    test_iter = PTBIterator(test_data, seq_len, device, batch_first)
-
-    return DatasetBundle(train_iter, valid_iter, test_iter, vocab=vocab)
+    return DatasetBundle(train_loader, test_loader, test_loader, vocab=vocab)

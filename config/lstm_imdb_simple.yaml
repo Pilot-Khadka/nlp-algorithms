@@ -1,6 +1,6 @@
 datasets:
   name: imdb
-  sequence_length: 35
+  sequence_length: 256
   data_dir: datasets/dataset_imdb/
   url: "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
   archive_name: aclImdb_v1.tar.gz
@@ -18,7 +18,7 @@ models:
   num_layers: 1
   dropout: 0.5
   bidirectional: false
-  weight_tying: true
+  weight_tying: false
 
 tasks:
   name: sentiment_analysis
