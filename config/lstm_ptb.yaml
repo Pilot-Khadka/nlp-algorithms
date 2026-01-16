@@ -12,7 +12,7 @@ datasets:
   prefetch_factor: 2       # Number of batches to prefetch per worker
 
 models:
-  name: lstm
+  name: awd-lstm
   input_dim: 300
   hidden_dim: 650
   num_layers: 2

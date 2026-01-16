@@ -11,7 +11,7 @@ datasets:
 
 
 models:
-  name: lstm
+  name: awd-lstm
   input_dim: 200
   hidden_dim: 200
   num_layers: 1

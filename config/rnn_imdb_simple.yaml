@@ -12,12 +12,12 @@ datasets:
 
 
 models:
-  name: lstm
-  input_dim: 128
-  hidden_dim: 256
-  num_layers: 2
+  name: rnn
+  input_dim: 200
+  hidden_dim: 200
+  num_layers: 1
   dropout: 0.5
-  bidirectional: true
+  bidirectional: false
   weight_tying: false
 
 tasks:
@@ -29,8 +29,8 @@ tasks:
     - recall
 
 train:
-  epochs: 15
-  batch_size: 64
+  epochs: 40
+  batch_size: 32
   multi_gpu: true
-  learning_rate: 1e-3
+  learning_rate: 1e-4
   grad_clip: 0.25

@@ -26,12 +26,13 @@ def register_model(name, *flags):
     flags = frozenset(flags)
 
     def decorator(cls):
-        variants = MODEL_REGISTRY.setdefault(name, {})
-        if flags in variants:
-            raise ValueError(
-                f"Duplicate registration for model '{name}' with flags {flags}"
-            )
-        variants[flags] = cls
+        if __name__ != "__main__":
+            variants = MODEL_REGISTRY.setdefault(name, {})
+            if flags in variants:
+                raise ValueError(
+                    f"Duplicate registration for model '{name}' with flags {flags}"
+                )
+            variants[flags] = cls
         return cls
 
     return decorator
