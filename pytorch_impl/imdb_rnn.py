@@ -73,6 +73,7 @@ def train_epoch(
     criterion: nn.Module,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
+    grad_clip: float,
 ) -> Tuple[float, float]:
     model.train()
     total_loss = 0
@@ -90,7 +91,7 @@ def train_epoch(
         loss = criterion(logits, labels)
 
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
         optimizer.step()
 
         total_loss += loss.item()
@@ -153,6 +154,7 @@ def train_model(
     num_epochs: int,
     learning_rate: float,
     device,
+    grad_clip,
 ) -> Dict[str, list]:
     model = model.to(device)
 
@@ -173,7 +175,7 @@ def train_model(
         print("-" * 50)
 
         train_loss, train_acc = train_epoch(
-            model, train_loader, criterion, optimizer, device
+            model, train_loader, criterion, optimizer, device, grad_clip
         )
 
         val_loss, val_acc = evaluate(
@@ -219,10 +221,10 @@ if __name__ == "__main__":
     from dataset.imdb import get_imdb_dataloaders
     from util.util import load_config, AttrDict
 
-    cfg = cast(AttrDict, load_config("../config/pytorch_lstm_imdb.yaml"))
+    # cfg = cast(AttrDict, load_config("../config/pytorch_rnn_imdb.yaml"))
+    cfg = load_config("../config/pytorch_rnn_imdb.yaml")
     dataset_bundle = get_imdb_dataloaders(cfg)
     vocab_size = dataset_bundle.vocab_size
-    print("vocab size:", vocab_size)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -230,11 +232,11 @@ if __name__ == "__main__":
 
     model = SentimentRNN(
         vocab_size=vocab_size,
-        embedding_dim=128,
-        hidden_dim=256,
-        num_layers=2,
-        dropout=0.5,
-        bidirectional=True,
+        embedding_dim=cfg.model.input_dim,
+        hidden_dim=cfg.model.hidden_dim,
+        num_layers=cfg.model.num_layers,
+        dropout=cfg.model.dropout,
+        bidirectional=cfg.model.bidirectional,
         rnn_type="lstm",
         num_classes=2,
         pad_idx=0,
@@ -247,6 +249,7 @@ if __name__ == "__main__":
         num_epochs=cfg.train.epochs,
         learning_rate=cfg.train.learning_rate,
         device=device,
+        grad_clip=cfg.train.grad_clip,
     )
 
     test_loss, test_acc = test_model(

@@ -1,4 +1,5 @@
 from typing import List, Tuple, Optional, cast
+
 import torch
 import torch.nn as nn
 
@@ -31,7 +32,7 @@ class LSTM(nn.Module):
         hidden_dim: int,
         output_dim: int,
         num_layers: int = 2,
-        dropout: float = 0.5,
+        dropout: float = 0.0,
         embed_dropout: float = 0.1,
         recurrent_dropout: float = 0.25,
         output_dropout: float = 0.5,
@@ -47,13 +48,8 @@ class LSTM(nn.Module):
 
         self.embedding = kwargs.get("embedding_layer", None)
         assert self.embedding is not None
-        # if self.embedding is None:
-        #     self.embedding = nn.Embedding(vocab_size, input_dim)
-        print("embedding weight shape:", self.embedding.weight.shape)
 
-        assert self.embedding is not None
         self.embed_dropout = WordDropout(embed_dropout)
-
         self.layer_dropouts = nn.ModuleList(
             [LockedDropout(dropout) for _ in range(num_layers)]
         )

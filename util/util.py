@@ -48,7 +48,7 @@ def convert_numeric(value):
     return value
 
 
-def convert_to_attrdict(obj):
+def convert_to_attrdict(obj: Any) -> Any:
     if isinstance(obj, dict):
         return AttrDict(
             {k: convert_to_attrdict(convert_numeric(v)) for k, v in obj.items()}
@@ -59,14 +59,16 @@ def convert_to_attrdict(obj):
         return convert_numeric(obj)
 
 
-def load_config(path: str):
+def load_config(path: str) -> AttrDict:
     raw_cfg = load_yaml(path)
     print(yaml.safe_dump(raw_cfg, sort_keys=False, default_flow_style=False))
 
     if not isinstance(raw_cfg, dict):
         raise ValueError("Top-level YAML must be a mapping")
 
-    return convert_to_attrdict(raw_cfg)
+    cfg = convert_to_attrdict(raw_cfg)
+    assert isinstance(cfg, AttrDict)
+    return cfg
 
 
 def save_checkpoint(

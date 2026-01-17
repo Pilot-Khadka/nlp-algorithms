@@ -14,55 +14,75 @@ class LSTM(nn.Module):
         input_dim,
         hidden_dim,
         output_dim,
+        num_layers,
         **kwargs,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
 
-        input_size = input_dim + hidden_dim
         self.embedding = kwargs.get("embedding_layer", None)
-        self.forget_gate = nn.Linear(input_size, hidden_dim)
-        self.input_gate1 = nn.Linear(input_size, hidden_dim)
-        self.input_gate2 = nn.Linear(input_size, hidden_dim)
-        self.output_gate = nn.Linear(input_size, hidden_dim)
+
+        self.gates_forward_x = nn.ModuleList()
+        self.gates_forward_h = nn.ModuleList()
+
+        for layer in range(num_layers):
+            layer_input_dim = input_dim if layer == 0 else hidden_dim
+            self.gates_forward_x.append(nn.Linear(layer_input_dim, 4 * hidden_dim))
+            self.gates_forward_h.append(nn.Linear(hidden_dim, 4 * hidden_dim))
 
         self.fc = nn.Linear(hidden_dim, output_dim)
 
-        self.sigmoid = nn.Sigmoid()
-        self.tanh = nn.Tanh()
-
-    # pyrefly: ignore [bad-override]
     def forward(self, x, hidden=None):
         if self.embedding:
             x = self.embedding(x)
+
         batch_size, seq_len, _ = x.size()
+
         if hidden is None:
-            h_t = torch.zeros(batch_size, self.hidden_dim, device=x.device)
+            h = [
+                torch.zeros(batch_size, self.hidden_dim, device=x.device)
+                for _ in range(self.num_layers)
+            ]
         else:
-            h_t = hidden
-        c_t = torch.zeros(batch_size, self.hidden_dim, device=x.device)
+            h = list(hidden)
+
+        c = [
+            torch.zeros(batch_size, self.hidden_dim, device=x.device)
+            for _ in range(self.num_layers)
+        ]
 
         outputs = []
         for t in range(seq_len):
-            x_t = x[:, t, :]
-            combined = torch.cat([x_t, h_t], dim=1)
+            layer_input = x[:, t, :]
 
-            f_t = self.sigmoid(self.forget_gate(combined))
-            i_t = self.sigmoid(self.input_gate1(combined))
-            g_t = self.tanh(self.input_gate2(combined))
-            o_t = self.sigmoid(self.output_gate(combined))
+            for layer in range(self.num_layers):
+                all_gates = self.gates_forward_x[layer](
+                    layer_input
+                ) + self.gates_forward_h[layer](h[layer])
 
-            c_t = f_t * c_t + i_t * g_t
-            h_t = o_t * self.tanh(c_t)
-            outputs.append(h_t.unsqueeze(1))  # (B, 1, H)
+                f_t, i_t, g_t, o_t = all_gates.chunk(4, dim=1)
 
-        out = torch.cat(outputs, dim=1)
-        # pyrefly: ignore [not-callable]
-        return self.fc(out) if self.fc else out
+                f_t = torch.sigmoid(f_t)
+                i_t = torch.sigmoid(i_t)
+                g_t = torch.tanh(g_t)
+                o_t = torch.sigmoid(o_t)
+
+                c[layer] = f_t * c[layer] + i_t * g_t
+                h[layer] = o_t * torch.tanh(c[layer])
+
+                layer_input = h[layer]
+
+            outputs.append(h[-1].unsqueeze(1))  # (B, 1, H)
+
+        outputs = torch.cat(outputs, dim=1)
+        output_seq = self.fc(outputs)
+
+        return output_seq
 
 
 if __name__ == "__main__":
-    model = LSTM(input_dim=10, hidden_dim=20, output_dim=5)
+    model = LSTM(input_dim=10, hidden_dim=20, output_dim=5, num_layers=1)
     print(model)
 
     x_dummy = torch.randn(3, 7, 10)  # (batch_size, seq_len, input_dim)
@@ -77,17 +97,3 @@ if __name__ == "__main__":
             print(f"{name} grad norm:", param.grad.norm().item())
         else:
             print(f"{name} has no grad")
-
-    x = torch.randn(100, 7, 10)
-    y = (x.sum(dim=(1, 2)) > 0).long()
-
-    loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-
-    for epoch in range(100):
-        optimizer.zero_grad()
-        logits = model(x)
-        loss = loss_fn(logits, y)
-        loss.backward()
-        optimizer.step()
-        print(f"Epoch {epoch}, Loss: {loss.item()}")

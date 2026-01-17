@@ -1,9 +1,8 @@
 dataset:
   name: imdb
   sequence_length: 256
-  data_dir: dataset/dataset_imdb/
+  data_dir: ../dataset/dataset_imdb/
   url: "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
-  archive_name: aclImdb_v1.tar.gz
 
   use_cache: true
   num_workers: auto
@@ -15,9 +14,9 @@ model:
   name: lstm
   input_dim: 128
   hidden_dim: 256
-  num_layers: 1
+  num_layers: 2
   dropout: 0.5
-  bidirectional: false
+  bidirectional: true
   weight_tying: false
 
 task:
@@ -33,4 +32,4 @@ train:
   batch_size: 64
   multi_gpu: true
   learning_rate: 1e-3
-  grad_clip: 5.0
+  grad_clip: 0.25

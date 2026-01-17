@@ -21,7 +21,7 @@ class IMDBDataset(Dataset):
         self.split = split
 
         self.min_freq = cfg.dataset.get("min_freq", 1)
-        self.max_seq_len = cfg.dataset.get("max_seq_len", 256)
+        self.max_seq_len = cfg.dataset.get("sequence_length", 256)
 
         self.prepare_data()
         texts, labels = self.load_raw_data()
@@ -241,7 +241,7 @@ def collate_tuple(batch: List[Tuple[torch.Tensor, ...]]) -> Tuple[torch.Tensor, 
     return input_ids, labels, doc_ids, chunk_ids
 
 
-def get_imdb_dataloaders(cfg):
+def get_imdb_dataloaders(cfg) -> DatasetBundle:
     batch_size = cfg.train.batch_size
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

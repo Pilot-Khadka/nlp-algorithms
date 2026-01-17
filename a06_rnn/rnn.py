@@ -17,8 +17,8 @@ class RNN(nn.Module):
         input_dim,
         hidden_dim,
         output_dim,
-        num_layers=2,
-        dropout=0.1,
+        num_layers,
+        dropout=0.0,
         **kwargs,
     ):
         super().__init__()
@@ -55,31 +55,6 @@ class RNN(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         self.h2o = nn.Linear(hidden_dim, output_dim)
-        self._reset_parameters()
-
-    def _reset_parameters(self):
-        for layer in range(self.num_layers):
-            nn.init.xavier_uniform_(self.w_ih[layer])
-            nn.init.orthogonal_(self.w_hh[layer])
-            nn.init.zeros_(self.b_ih[layer])
-            nn.init.zeros_(self.b_hh[layer])
-
-        nn.init.xavier_uniform_(self.h2o.weight)
-        if self.h2o.bias is not None:
-            nn.init.zeros_(self.h2o.bias)
-
-    @property
-    def is_stateful(self) -> bool:
-        return True
-
-    def reset_state(self) -> None:
-        self._hidden = None
-
-    def get_state(self) -> Optional[torch.Tensor]:
-        return self._hidden
-
-    def set_state(self, state: Optional[torch.Tensor]) -> None:
-        self._hidden = state
 
     def init_hidden(
         self,

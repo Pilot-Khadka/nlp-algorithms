@@ -25,7 +25,7 @@ class StackedRNN(nn.Module):
             self.stacks.append(nn.Linear(self.hidden_dim * 2, self.hidden_dim))
         self.stacks.append(nn.Linear(self.hidden_dim * 2, self.output_dim))
 
-        self.activation = nn.Tanh()
+        self.output_layer = nn.Linear(2 * hidden_dim, output_dim)
 
     def forward(self, input_seq, hidden=None):
         batch_size, seq_len, _ = input_seq.size()
@@ -41,11 +41,11 @@ class StackedRNN(nn.Module):
             x = input_seq[:, t, :]  # (batch, embedding_dim)
 
             h0_input = torch.cat((x, hidden[0]), dim=1)
-            new_hidden = [self.activation(self.i2h(h0_input))]
+            new_hidden = [torch.tanh(self.i2h(h0_input))]
 
             for i in range(1, self.num_stacks):
                 h_input = torch.cat((new_hidden[i - 1], hidden[i]), dim=1)
-                h_i = self.activation(self.stacks[i - 1](h_input))
+                h_i = torch.tanh(self.stacks[i - 1](h_input))
                 new_hidden.append(h_i)
 
             hidden = new_hidden

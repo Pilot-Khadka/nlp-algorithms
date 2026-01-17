@@ -2,7 +2,7 @@ import os
 import logging
 
 
-def setup_logging(log_dir="logs"):
+def setup_logging(log_dir="log"):
     os.makedirs(log_dir, exist_ok=True)
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)

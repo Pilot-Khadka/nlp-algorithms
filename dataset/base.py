@@ -197,7 +197,7 @@ class DatasetBundle:
         train_loader,
         valid_loader,
         test_loader,
-        vocab=None,
+        vocab,
     ):
         self.train_loader = train_loader
         self.valid_loader = valid_loader
@@ -206,7 +206,8 @@ class DatasetBundle:
 
     @property
     def vocab_size(self):
-        return self.train_loader.dataset.vocab_size
+        assert self.vocab is not None
+        return len(self.vocab)
 
     @property
     def num_classes(self):

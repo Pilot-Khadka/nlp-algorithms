@@ -1,3 +1,0 @@
-defaults:
-  - experiment: ptb_lstm
-
