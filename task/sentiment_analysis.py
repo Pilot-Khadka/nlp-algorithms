@@ -220,4 +220,5 @@ class SentimentAnalysisTask(BaseTask):
             if hasattr(sa_metrics, name):
                 avg_metrics[name] = getattr(sa_metrics, name)(context)
 
+        metrics_tracker.update(avg_metrics)
         return avg_valid_loss, avg_metrics

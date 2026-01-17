@@ -24,14 +24,14 @@ class MetricsTracker:
         self.accumulated: defaultdict[str, float] = defaultdict(float)
         self.counts: defaultdict[str, int] = defaultdict(int)
 
-    def update(self, batch_metrics: Dict[str, float], batch_size: int = 1) -> None:
-        self.batch_metrics.append(batch_metrics)
+    def update(self, metrics: Dict[str, float]) -> None:
+        self.batch_metrics.append(metrics)
 
-        for metric_name, value in batch_metrics.items():
+        for name, value in metrics.items():
             if isinstance(value, torch.Tensor):
                 value = value.item()
-            self.accumulated[metric_name] += value * batch_size
-            self.counts[metric_name] += batch_size
+            self.accumulated[name] += value
+            self.counts[name] += 1
 
     def get_averages(self) -> Dict[str, float]:
         if not self.accumulated:

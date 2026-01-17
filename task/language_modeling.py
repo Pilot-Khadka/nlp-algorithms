@@ -210,9 +210,14 @@ class LanguageModelingTask(BaseTask):
         accepts_hidden = "hidden" in forward_params
         accepts_cell = "cell" in forward_params
 
+        all_logits = []
+        all_targets = []
         with torch.no_grad():
             for batch_idx, batch in enumerate(valid_progress):
                 inputs, targets = batch
+                batch_size = inputs.size(0)
+                batch_tokens = targets.numel()
+
                 inputs, targets = inputs.to(device), targets.to(device)
 
                 forward_kwargs = {}
@@ -243,23 +248,14 @@ class LanguageModelingTask(BaseTask):
                 loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
                 loss_value = loss.item()
 
-                batch_tokens = targets.numel()
-                total_valid_loss += loss_value * batch_tokens
+                total_valid_loss += loss_value * batch_size
                 total_tokens += batch_tokens
 
-                context = {
-                    "loss": loss_value,
-                    "outputs": logits,
-                    "targets": targets,
-                }
-
-                batch_metrics = {"loss": loss_value}
-                for name in metrics_tracker.metric_names:
-                    if hasattr(lm_metrics, name):
-                        func = getattr(lm_metrics, name)
-                        batch_metrics[name] = func(context)
-
-                metrics_tracker.update(batch_metrics, batch_tokens)
+                # invariant of sequence length
+                all_logits.append(
+                    logits.view(-1, logits.size(-1)).detach()
+                )  # (batch*seq, vocab)
+                all_targets.append(targets.view(-1).detach())  # (batch*seq,)
 
                 if is_main and hasattr(valid_progress, "set_postfix"):
                     current_metrics = metrics_tracker.get_averages()
@@ -274,19 +270,43 @@ class LanguageModelingTask(BaseTask):
 
         self.on_epoch_end(model, training=False)
 
+        all_logits = torch.cat(all_logits, dim=0)
+        all_targets = torch.cat(all_targets, dim=0)
         avg_valid_loss = total_valid_loss / total_tokens if total_tokens > 0 else 0.0
 
         if use_ddp:
-            loss_tensor = torch.tensor([total_valid_loss, total_tokens], device=device)
+            loss_tensor = torch.tensor(
+                [total_valid_loss, float(total_tokens)], device=device
+            )
             dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
             avg_valid_loss = (loss_tensor[0] / loss_tensor[1]).item()
-
-            avg_metrics = metrics_tracker.get_averages()
-            for key in avg_metrics:
-                metric_tensor = torch.tensor(avg_metrics[key], device=device)
-                dist.all_reduce(metric_tensor, op=dist.ReduceOp.AVG)
-                avg_metrics[key] = metric_tensor.item()
         else:
-            avg_metrics = metrics_tracker.get_averages()
+            avg_valid_loss = (
+                total_valid_loss / total_tokens if total_tokens > 0 else 0.0
+            )
 
+        if use_ddp:
+            world_size = dist.get_world_size()
+
+            logits_list = [torch.empty_like(all_logits) for _ in range(world_size)]
+            targets_list = [torch.empty_like(all_targets) for _ in range(world_size)]
+
+            dist.all_gather(logits_list, all_logits)
+            dist.all_gather(targets_list, all_targets)
+
+            all_logits = torch.cat(logits_list, dim=0)
+            all_targets = torch.cat(targets_list, dim=0)
+
+        context = {
+            "loss": avg_valid_loss,
+            "outputs": all_logits.cpu(),
+            "targets": all_targets.cpu(),
+        }
+
+        avg_metrics = {"loss": avg_valid_loss}
+        for name in metrics_tracker.metric_names:
+            if hasattr(lm_metrics, name):
+                avg_metrics[name] = getattr(lm_metrics, name)(context)
+
+        metrics_tracker.update(avg_metrics)
         return avg_valid_loss, avg_metrics

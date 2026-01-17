@@ -14,16 +14,14 @@ from model.model_registry import load_vocab
 
 class PTBCorpus:
     def __init__(self, cfg, split: str, vocab: Optional[Dict[str, int]] = None):
-        self.data_dir = cfg.datasets["data_dir"]
-        self.seq_len = cfg.datasets["sequence_length"]
+        self.data_dir = cfg.dataset["data_dir"]
+        self.seq_len = cfg.dataset["sequence_length"]
         self.split = split
-        self.use_pretrained_embedding = cfg.models.get(
-            "use_pretrained_embedding", False
-        )
+        self.use_pretrained_embedding = cfg.model.get("use_pretrained_embedding", False)
 
         if not os.path.exists(self.data_dir):
             self.urls = {
-                split_name: cfg.datasets[f"{split_name}_url"]
+                split_name: cfg.dataset[f"{split_name}_url"]
                 for split_name in ["train", "valid", "test"]
             }
             self._download_ptb()
@@ -204,8 +202,8 @@ class PTBIterator:
 
 def get_ptb_dataloaders(cfg):
     batch_size = cfg.train.batch_size
-    seq_len = cfg.datasets["sequence_length"]
-    batch_first = cfg.datasets.get("batch_first", True)
+    seq_len = cfg.dataset["sequence_length"]
+    batch_first = cfg.dataset.get("batch_first", True)
 
     if hasattr(cfg.train, "device"):
         device = torch.device(cfg.train.device)

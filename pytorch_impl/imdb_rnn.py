@@ -1,4 +1,4 @@
-from typing import Dict, Tuple
+from typing import Dict, Tuple, cast
 
 import torch
 import torch.nn as nn
@@ -217,11 +217,11 @@ def test_model(
 
 if __name__ == "__main__":
     from dataset.imdb import get_imdb_dataloaders
-    from util.util import load_config
+    from util.util import load_config, AttrDict
 
-    cfg = load_config("../config/pytorch_lstm_imdb.yaml")
+    cfg = cast(AttrDict, load_config("../config/pytorch_lstm_imdb.yaml"))
     dataset_bundle = get_imdb_dataloaders(cfg)
-    vocab_size = len(dataset_bundle.vocab_size)
+    vocab_size = dataset_bundle.vocab_size
     print("vocab size:", vocab_size)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -244,8 +244,8 @@ if __name__ == "__main__":
         model=model,
         train_loader=dataset_bundle.train_loader,
         val_loader=dataset_bundle.valid_loader,
-        num_epochs=int(cfg.train["epochs"]),  # pyrefly ignore
-        learning_rate=cfg.train.learning_rate,  # pyrefly ignore
+        num_epochs=cfg.train.epochs,
+        learning_rate=cfg.train.learning_rate,
         device=device,
     )
 

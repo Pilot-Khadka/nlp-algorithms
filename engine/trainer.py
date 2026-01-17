@@ -79,7 +79,7 @@ class Trainer:
         self.metrics_tracker = MetricsTracker(metric_names)
 
         if self.is_main:
-            self.checkpoint_dir = Path(config.get("checkpoints", "./checkpoints"))
+            self.checkpoint_dir = Path(config.get("checkpoint", "./checkpoint"))
             self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     def _save_checkpoint(
