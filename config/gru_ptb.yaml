@@ -1,7 +1,7 @@
-datasets:
+dataset:
   name: ptb
   sequence_length: 70
-  data_dir: datasets/dataset_penn_treebank/
+  data_dir: dataset/dataset_penn_treebank/
   train_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.train.txt"
   valid_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.valid.txt"
   test_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.test.txt"
@@ -11,7 +11,7 @@ datasets:
   pin_memory: true
   prefetch_factor: 2
 
-models:
+model:
   name: gru
   input_dim: 300
   hidden_dim: 650
@@ -32,7 +32,7 @@ train:
   compile_model: false
   # checkpoint: "checkpoints/best.pt"
 
-tasks:
+task:
   name: language_modeling
   metrics:
     - perplexity

@@ -7,9 +7,9 @@ from torch.utils.data import DataLoader
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from tasks.base_task import BaseTask
-from utils.metrics import MetricsTracker
-from utils.utils import save_checkpoint, load_checkpoint
+from task.base_task import BaseTask
+from util.metric import MetricsTracker
+from util.util import save_checkpoint, load_checkpoint
 
 
 class Trainer:

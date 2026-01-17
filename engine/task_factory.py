@@ -1,5 +1,5 @@
-from tasks.language_modeling import LanguageModelingTask
-from tasks.sentiment_analysis import SentimentAnalysisTask
+from task.language_modeling import LanguageModelingTask
+from task.sentiment_analysis import SentimentAnalysisTask
 # from tasks.translation import TranslationTask
 
 

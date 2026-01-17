@@ -1,7 +1,0 @@
-name: ptb
-sequence_length: 100
-data_dir: datasets/dataset_penn_treebank/
-train_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.train.txt"
-valid_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.valid.txt"
-test_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.test.txt"
-

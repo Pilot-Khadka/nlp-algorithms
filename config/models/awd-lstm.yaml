@@ -1,8 +1,0 @@
-hidden_dim = 1150
-num_layers = 3
-dropout_w = 0.5
-dropout_i = 0.4
-dropout_h = 0.25
-dropout_o = 0.4
-alpha = 2.0
-beta = 1.0

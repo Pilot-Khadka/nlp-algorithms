@@ -1,4 +1,0 @@
-name: sst2
-sequence_length: 100
-data_dir: datasets/dataset_sst2
-url: https://nlp.stanford.edu/sentiment/trainDevTestTrees_PTB.zip

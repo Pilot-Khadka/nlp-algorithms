@@ -1,11 +1,10 @@
 def main():
-    from train_utils import run_training
-    from utils.utils import load_config, to_attrdict
+    from train_util import run_training
+    from util.util import load_config
 
     cfg = load_config(path="config/lstm_imdb_simple.yaml")
 
-    cfg_resolved = to_attrdict(cfg)
-    run_training(cfg_resolved=cfg_resolved)
+    run_training(cfg_resolved=cfg)
 
 
 if __name__ == "__main__":

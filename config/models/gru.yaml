@@ -1,7 +1,0 @@
-name: gru
-embedding_dim: 100
-hidden_dim: 256
-use_pretrained_embedding: false
-embedding_path: ./models/word2vec/word2vec_final.pt
-vocab_path: ./models/word2vec/vocab.pkl
-

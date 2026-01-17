@@ -1,7 +1,7 @@
-datasets:
+dataset:
   name: imdb
   sequence_length: 256
-  data_dir: datasets/dataset_imdb/
+  data_dir: dataset/dataset_imdb/
   url: "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
   archive_name: aclImdb_v1.tar.gz
 
@@ -11,7 +11,7 @@ datasets:
   prefetch_factor: 2
 
 
-models:
+model:
   name: lstm
   input_dim: 128
   hidden_dim: 256
@@ -20,7 +20,7 @@ models:
   bidirectional: true
   weight_tying: false
 
-tasks:
+task:
   name: sentiment_analysis
   metrics:
     - accuracy
@@ -33,4 +33,4 @@ train:
   batch_size: 64
   multi_gpu: true
   learning_rate: 1e-3
-  grad_clip: 0.25
+  grad_clip: 5.0

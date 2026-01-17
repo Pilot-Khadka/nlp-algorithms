@@ -1,6 +1,8 @@
+from typing import Dict, Tuple
+
 import torch
 import torch.nn as nn
-from typing import Dict, Tuple
+
 from tqdm import tqdm
 
 
@@ -214,28 +216,12 @@ def test_model(
 
 
 if __name__ == "__main__":
-    from datasets.imdb import get_imdb_dataloaders
-    from omegaconf import OmegaConf
+    from dataset.imdb import get_imdb_dataloaders
+    from util.util import load_config
 
-    cfg = OmegaConf.create(
-        {
-            "datasets": {
-                "data_dir": "./data",
-                "url": "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz",
-                "archive_name": "aclImdb_v1.tar.gz",
-                "min_freq": 5,
-                "max_seq_len": 256,
-            },
-            "train": {
-                "batch_size": 32,
-                "num_epochs": 40,
-                "learning_rate": 1e-3,
-            },
-        }
-    )
-
+    cfg = load_config("../config/pytorch_lstm_imdb.yaml")
     dataset_bundle = get_imdb_dataloaders(cfg)
-    vocab_size = dataset_bundle.vocab_size
+    vocab_size = len(dataset_bundle.vocab_size)
     print("vocab size:", vocab_size)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -258,8 +244,8 @@ if __name__ == "__main__":
         model=model,
         train_loader=dataset_bundle.train_loader,
         val_loader=dataset_bundle.valid_loader,
-        num_epochs=cfg.train.num_epochs,
-        learning_rate=cfg.train.learning_rate,
+        num_epochs=int(cfg.train["epochs"]),  # pyrefly ignore
+        learning_rate=cfg.train.learning_rate,  # pyrefly ignore
         device=device,
     )
 
