@@ -4,56 +4,44 @@ import torch.nn as nn
 
 
 class PositionalEncoding(nn.Module):
-    """
-    Args:
-        d_model (int): The embedding dimension.
-        max_len (int): The maximum length of the sequence.
-        method (str): The type of positional encoding to use.
-                      Can be 'sinusoidal' or 'learned'.
-    """
-
     def __init__(self, d_model, max_len=5000, method="sinusoidal"):
         super().__init__()
         self.d_model = d_model
-        self.method = method
+        self.method = method.lower()
+        self.max_len = max_len
 
         if self.method == "sinusoidal":
-            # sinusodial positional encoding as described in "Attention Is All You Need"
-            self.pe = torch.zeros(max_len, d_model)
-            position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-
+            # precompute once
+            pe = torch.zeros(max_len, d_model)
+            position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(
+                1
+            )  # [max_len, 1]
             div_term = torch.exp(
-                torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+                torch.arange(0, d_model, 2, dtype=torch.float)
+                * (-math.log(10000.0) / d_model)
             )
+            pe[:, 0::2] = torch.sin(position * div_term)
+            pe[:, 1::2] = torch.cos(position * div_term)
 
-            self.pe[:, 0::2] = torch.sin(position * div_term)
-            self.pe[:, 1::2] = torch.cos(position * div_term)
-
-            # register buffer to prevent the tensor from being considered a model parameter
-            self.register_buffer("pe", self.pe.unsqueeze(0))
+            # [1, max_len, d_model] for broadcasting
+            self.register_buffer("pe", pe.unsqueeze(0))
 
         elif self.method == "learned":
-            # learned positional embeddings, similar to what BERT uses
+            # learned positional embeddings
             self.pos_embedding = nn.Embedding(max_len, d_model)
-
         else:
             raise ValueError("Method must be 'sinusoidal' or 'learned'")
 
     def forward(self, x):
-        """
-        Args:
-            x (torch.Tensor): The input tensor of shape (batch_size, seq_len, d_model).
-
-        Returns:
-            torch.Tensor: The input tensor with positional encoding added.
-        """
         seq_len = x.size(1)
 
         if self.method == "sinusoidal":
             return x + self.pe[:, :seq_len, :]
 
         elif self.method == "learned":
-            positions = torch.arange(0, seq_len, device=x.device).unsqueeze(0)
+            positions = torch.arange(seq_len, device=x.device).unsqueeze(
+                0
+            )  # [1, seq_len]
             return x + self.pos_embedding(positions)
 
 
@@ -62,9 +50,11 @@ if __name__ == "__main__":
     seq_len = 10
     batch_size = 2
 
-    pos_enc = PositionalEncoding(d_model, max_len=1000)
+    pos_enc_sin = PositionalEncoding(d_model, max_len=1000, method="sinusoidal")
     x = torch.randn(batch_size, seq_len, d_model)
-    output = pos_enc(x)
+    out_sin = pos_enc_sin(x)
+    print(f"Sinusoidal output shape: {out_sin.shape}")
 
-    print(f"Input shape: {x.shape}")
-    print(f"Output shape: {output.shape}")
+    pos_enc_learned = PositionalEncoding(d_model, max_len=1000, method="learned")
+    out_learned = pos_enc_learned(x)
+    print(f"Learned output shape: {out_learned.shape}")
