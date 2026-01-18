@@ -1,0 +1,36 @@
+dataset:
+  name: imdb
+  sequence_length: 256
+  data_dir: dataset/dataset_imdb/
+  url: "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
+  archive_name: aclImdb_v1.tar.gz
+
+  use_cache: true
+  num_workers: auto
+  pin_memory: true
+  prefetch_factor: 2
+
+
+model:
+  name: gru
+  input_dim: 128
+  hidden_dim: 256
+  num_layers: 1
+  dropout: 0.5
+  bidirectional: true
+  weight_tying: false
+
+task:
+  name: sentiment_analysis
+  metrics:
+    - accuracy
+    - f1_score
+    - precision
+    - recall
+
+train:
+  epochs: 15
+  batch_size: 64
+  multi_gpu: true
+  learning_rate: 1e-3
+  grad_clip: 5.0

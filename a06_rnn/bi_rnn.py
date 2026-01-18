@@ -46,13 +46,13 @@ class BidirectionalRNN(nn.Module):
         ]
 
     def forward(self, x, hidden=None):
+        assert hidden is None
         if self.embedding:
             x = self.embedding(x)
 
         batch_size, seq_len, _ = x.size()
 
-        if hidden is None:
-            hidden = self.init_hidden(batch_size, x.device)
+        hidden = self.init_hidden(batch_size, x.device)
 
         layer_input = x
         final_hidden = []
@@ -102,9 +102,14 @@ class BidirectionalRNN(nn.Module):
 
         assert last_backward_out is not None
         assert last_forward_out is not None
-        bi_out = torch.cat((last_forward_out, last_backward_out), dim=2)
-        output_seq = self.fc(bi_out)
-        return output_seq, final_hidden
+        # bi_out = torch.cat((last_forward_out, last_backward_out), dim=2)
+        # output_seq = self.fc(bi_out)
+
+        h_f, h_b = final_hidden[-1]  # (batch, hidden_dim) each
+        seq_repr = torch.cat((h_f, h_b), dim=1)  # (batch, 2 * hidden_dim)
+        logits = self.fc(seq_repr)
+        return logits, final_hidden
+        # return output_seq, final_hidden
 
 
 if __name__ == "__main__":

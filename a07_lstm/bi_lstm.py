@@ -40,9 +40,8 @@ class BiLSTM(BaseModel):
 
         self.fc = nn.Linear(2 * hidden_dim, output_dim)
 
-        self.fc = nn.Linear(2 * hidden_dim, output_dim)
-
     def forward(self, x, hidden=None):
+        assert hidden is None
         if self.embedding:
             x = self.embedding(x)
 
