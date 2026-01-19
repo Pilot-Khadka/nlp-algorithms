@@ -4,12 +4,12 @@ import os
 import requests
 import numpy as np
 from tqdm import tqdm
-from collections import Counter
 
 import torch
 
 from dataset.base import DatasetBundle
 from model.model_registry import load_vocab
+from core_tokenization import WhitespaceTokenizer
 
 
 class PTBCorpus:
@@ -17,6 +17,7 @@ class PTBCorpus:
         self.data_dir = cfg.dataset["data_dir"]
         self.seq_len = cfg.dataset["sequence_length"]
         self.split = split
+        self.tokenizer = WhitespaceTokenizer()
         self.use_pretrained_embedding = cfg.model.get("use_pretrained_embedding", False)
 
         if not os.path.exists(self.data_dir):
@@ -26,7 +27,7 @@ class PTBCorpus:
             }
             self._download_ptb()
 
-        tokens = self._load_tokens()
+        raw_text = self._load_raw_text()
 
         if vocab is None:
             if split != "train":
@@ -36,36 +37,29 @@ class PTBCorpus:
                 pretrained_vocab = load_vocab(cfg.model.get("vocab_path"))
                 self.vocab = self._add_special_tokens(pretrained_vocab)
             else:
-                self.vocab = self._build_vocab(tokens)
+                print("Building vocabulary from training tokens...")
+                self.tokenizer.build_vocab(raw_text)
+                self.vocab = self.tokenizer.get_vocab()
         else:
             self.vocab = vocab
+            self.tokenizer.vocab = vocab
+        print(f"Encoding {len(raw_text)} tokens...")
+        self.data = self._encode_tokens(raw_text)
 
-        self.data = self._encode_tokens(tokens)
-
-    def _load_tokens(self) -> List[str]:
+    def _load_raw_text(self) -> List[str]:
         file_path = os.path.join(self.data_dir, f"{self.split}.txt")
         with open(file_path, "r", encoding="utf-8") as f:
             return f.read().replace("\n", " <eos> ").split()
 
     def _encode_tokens(self, tokens: List[str]) -> torch.Tensor:
-        unk_idx = self.vocab["<unk>"]
+        unk_idx = self.vocab.get("<unk>", 1)
         vocab_get = self.vocab.get
         encoded = np.fromiter(
-            (vocab_get(t, unk_idx) for t in tokens),
+            (vocab_get(t, unk_idx) for t in tqdm(tokens, desc="Encoding tokens")),
             dtype=np.int64,
             count=len(tokens),
         )
         return torch.from_numpy(encoded)
-
-    def _build_vocab(self, tokens: List[str], min_freq: int = 1) -> Dict[str, int]:
-        counter = Counter(tokens)
-        vocab = {"<pad>": 0, "<unk>": 1}
-        idx = 2
-        for token, freq in counter.items():
-            if freq >= min_freq and token not in vocab:
-                vocab[token] = idx
-                idx += 1
-        return vocab
 
     def _add_special_tokens(self, pretrained_vocab: Dict) -> Dict[str, int]:
         special_tokens = ["<pad>", "<unk>", "<eos>"]

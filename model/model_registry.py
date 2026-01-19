@@ -1,7 +1,7 @@
 import torch
 import pickle
 
-from a04_vectorization.word2vec.word2vec import Word2Vec
+from core_vectorization.word2vec.word2vec import Word2Vec
 
 MODEL_CLASS_MAP = {
     "word2vec": Word2Vec,

@@ -12,7 +12,17 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["util"]
+packages = [
+    "core_tokenization",
+    "core_vectorization",
+    "net_rnn",
+    "net_lstm",
+    "net_gru",
+    "util",
+    "dataset",
+    "engine",
+    "task",
+]
 
 [tool.pyrefly]
 project-includes = [

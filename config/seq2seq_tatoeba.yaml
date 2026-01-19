@@ -1,0 +1,42 @@
+dataset:
+  name: tatoeba
+  language: eng_nep
+  data_dir: ../dataset/dataset_tatoeba_eng_nep/
+  url: "https://object.pouta.csc.fi/Tatoeba-Challenge-v2023-09-26/eng-nep.tar"
+
+  use_cache: true
+  num_workers: auto
+  pin_memory: true
+  prefetch_factor: 2
+
+  # language: eng_jpn
+  # data_dir: dataset/dataset_tatoeba_eng_jpn/
+  # url: "https://object.pouta.csc.fi/Tatoeba-Challenge-v2023-09-26/eng-jpn.tar"
+
+
+  # name: tatoeba_eng_fra
+  # language: eng_fra
+  # data_dir: dataset/dataset_tatoeba_eng_fra/
+  # url: "https://object.pouta.csc.fi/Tatoeba-Challenge-v2023-09-26/eng-fra.tar"
+
+  # name: tatoeba_eng_spa
+  # language: eng_spa
+  # data_dir: dataset/dataset_tatoeba_eng_spa/
+  # url: "https://object.pouta.csc.fi/Tatoeba-Challenge-v2023-09-26/eng-spa.tar"
+
+  # name: tatoeba_eng_deu
+  # language: eng_deu
+  # data_dir: dataset/dataset_tatoeba_eng_deu/
+
+
+model:
+  name: seq2seq
+task:
+  name: machine_translation
+  metrics:
+
+train:
+  epochs: 15
+  batch_size: 64
+  multi_gpu: true
+  learning_rate: 1e-3

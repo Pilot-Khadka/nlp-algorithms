@@ -3,7 +3,6 @@ def main():
     from util.util import load_config
 
     cfg = load_config(path="config/bigru_imdb.yaml")
-
     run_training(cfg_resolved=cfg)
 
 

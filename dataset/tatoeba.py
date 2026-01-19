@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader, Dataset
 from dataset.base import DatasetBundle, DatasetUtils
 
 # later will be tokenizer agnostic
-from a03_tokenization.whitespace import WhitespaceTokenizer
+from core_tokenization import WhitespaceTokenizer
 
 
 class TatoebaDataset(Dataset):
@@ -91,9 +91,6 @@ class TatoebaDataset(Dataset):
             raise
 
     def _flatten_extracted_files(self, src_root: str, dst_root: Optional[str] = None):
-        if os.path.abspath(src_root) == os.path.abspath(dst_root):
-            raise ValueError("src_root and dst_root must be different")
-
         import gzip
 
         if dst_root is None:
@@ -168,10 +165,10 @@ class TatoebaDataset(Dataset):
     def __len__(self):
         return len(self.source_ids)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, index):
         return {
-            "source": torch.tensor(self.source_ids[idx], dtype=torch.long),
-            "target": torch.tensor(self.target_ids[idx], dtype=torch.long),
+            "source": torch.tensor(self.source_ids[index], dtype=torch.long),
+            "target": torch.tensor(self.target_ids[index], dtype=torch.long),
         }
 
 
