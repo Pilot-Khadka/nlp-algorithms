@@ -1,20 +1,30 @@
+default_install_hook_types:
+  - pre-commit
+  - commit-msg
+
+
 repos:
-- repo: https://github.com/pre-commit/pre-commit-hooks
+- hooks:
+  - id: trailing-whitespace
+  - id: check-added-large-files
+  - id: check-docstring-first
+  - id: check-json
+  - id: check-toml
+  - id: check-yaml
+  repo: https://github.com/pre-commit/pre-commit-hooks
   rev: v6.0.0
-  hooks:
-    - id: trailing-whitespace
-    - id: check-added-large-files
-    - id: check-docstring-first
-    - id: check-json
-    - id: check-toml
-    - id: check-yaml
+- hooks:
+  - entry: env PYTHONPATH= pyrefly check
+    id: pyrefly-check
+    language: system
+    name: Pyrefly (type checking)
+    pass_filenames: true
+  repo: https://github.com/facebook/pyrefly-pre-commit
+  rev: 0.48.2
 
-
-- repo: https://github.com/facebook/pyrefly-pre-commit
-  rev: 0.47.0  # Note: this is the version of the pre-commit hook, NOT the pyrefly version used for type checking
+- repo: https://github.com/compilerla/conventional-pre-commit
+  rev: v4.3.0
   hooks:
-    - id: pyrefly-check
-      name: Pyrefly (type checking)
-      entry: env PYTHONPATH= pyrefly check
-      pass_filenames: true  # Recommended to do full repo checks. However, you can change this to `true` to only check changed files
-      language: system  # Use system-installed pyrefly
+    - id: conventional-pre-commit
+      stages: [commit-msg]
+      args: []

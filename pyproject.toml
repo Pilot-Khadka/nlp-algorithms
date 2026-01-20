@@ -18,10 +18,14 @@ packages = [
     "net_rnn",
     "net_lstm",
     "net_gru",
+    "trans_encoder_decoder",
+    "trans_encoder_only",
+    "trans_attention",
     "util",
     "dataset",
     "engine",
     "task",
+    "model",
 ]
 
 [tool.pyrefly]
