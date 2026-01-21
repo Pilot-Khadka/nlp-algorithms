@@ -25,12 +25,12 @@ packages = [
     "dataset",
     "engine",
     "task",
-    "model",
+    "infra"
 ]
 
 [tool.pyrefly]
 project-includes = [
     "**/*.py*",
-    "**/*.ipynb",
 ]
+ignore_missing_imports = true
 

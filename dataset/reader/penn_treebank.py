@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Dict
 
 import os
 
@@ -16,9 +16,9 @@ class PTBDataset(Dataset):
                 f"Call PTBDownloader.download_and_prepare(cfg) first."
             )
 
-        self.tokens = self._load_raw_tokens()
+        self.text = self._load_text()
 
-    def _load_raw_tokens(self) -> List[str]:
+    def _load_text(self) -> str:
         all_files = os.listdir(self.data_dir)
 
         target_file = None
@@ -43,19 +43,17 @@ class PTBDataset(Dataset):
         with open(file_path, "r", encoding="utf-8") as f:
             # replace newlines with <eos> and split into tokens
             text = f.read().replace("\n", " <eos> ")
-            tokens = text.split()
 
-        print(f"Loaded {len(tokens)} tokens from {self.split} split")
-        return tokens
+        print(f"Loaded {len(text)} characters from {self.split} split")
+        return text
 
     def __len__(self) -> int:
-        return len(self.tokens)
+        return 1  # one text document for this split
 
-    def __getitem__(self, index: int) -> str:
-        return self.tokens[index]
-
-    def get_all_tokens(self) -> List[str]:
-        return self.tokens
+    def __getitem__(self, index: int) -> Dict[str, str]:
+        if index != 0:
+            raise IndexError("PTBDataset contains a single text sample")
+        return {"text": self.text}
 
 
 if __name__ == "__main__":
@@ -76,8 +74,8 @@ if __name__ == "__main__":
     # valid_dataset = PTBDataset(data_dir, split="valid")
     test_dataset = PTBDataset(data_dir, split="test")
 
-    token = test_dataset[0]
-    all_tokens = test_dataset.get_all_tokens()
+    sample = test_dataset[0]
+    raw_text = sample["text"]
 
-    print(f"Dataset size: {len(test_dataset)} tokens")
-    print(f"First 10 tokens: {all_tokens[:10]}")
+    print("raw text:", raw_text)
+    print(f"Dataset size: {len(test_dataset)} text")
