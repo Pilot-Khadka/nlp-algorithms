@@ -10,7 +10,7 @@ torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.deterministic = False
 
 
-@register_model("rnn")
+@register_model("rnn", flags=["unidirectional"])
 class RNN(nn.Module):
     def __init__(
         self,

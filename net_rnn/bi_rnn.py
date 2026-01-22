@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from engine.registry import register_model
 
 
-@register_model("rnn", "bidirectional")
+@register_model("rnn", flags=["bidirectional"])
 class BidirectionalRNN(nn.Module):
     def __init__(
         self,

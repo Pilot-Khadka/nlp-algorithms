@@ -6,7 +6,10 @@ from torch.nn.utils.rnn import pad_sequence
 
 from infra.collator import BaseCollator
 
+from engine.registry import register_collator
 
+
+@register_collator("language_modeling")
 class LanguageModelingCollator(BaseCollator):
     """Collator for language modeling (next token prediction)."""
 

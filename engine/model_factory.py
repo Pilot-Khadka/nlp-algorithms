@@ -3,7 +3,7 @@ from typing import Any
 import torch.nn as nn
 
 from engine.registry import MODEL_REGISTRY
-from model.model_registry import load_model_from_name
+from util.model_loading import load_model_from_name
 
 
 class BaseModel(nn.Module):

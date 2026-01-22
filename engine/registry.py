@@ -1,37 +1,58 @@
 from typing import Dict
 
+
 MODEL_REGISTRY: Dict = {}
+DATASET_READER: Dict = {}
+COLLATOR: Dict = {}
+TOKENIZER: Dict = {}
+VECTORIZER: Dict = {}
+TASK: Dict = {}
 
 
-def auto_register_models():
-    import sys
-    import importlib
-    import pkgutil
-    import pathlib
-
-    root = pathlib.Path(__file__).resolve().parent.parent
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
-
-    for module in pkgutil.walk_packages(path=[str(root)]):
-        if module.ispkg:
-            continue  # skip packages, only import .py files
-        try:
-            importlib.import_module(module.name)
-        except Exception as e:
-            print(f"[WARN] Skipped {module.name}: {e}")
-
-
-def register_model(name, *flags):
-    flags = frozenset(flags)
+def register_model(name, *, flags=None):
+    """flags define model capabilities"""
+    flags = frozenset(flags or [])
 
     def decorator(cls):
-        variants = MODEL_REGISTRY.setdefault(name, {})
-        if flags in variants:
-            raise ValueError(
-                f"Duplicate registration for model '{name}' with flags {flags}"
-            )
-        variants[flags] = cls
+        MODEL_REGISTRY.setdefault(name, {})[flags] = cls
         return cls
 
     return decorator
+
+
+def register_dataset(name):
+    def wrapper(cls):
+        DATASET_READER[name] = cls
+        return cls
+
+    return wrapper
+
+
+def register_collator(task):
+    def wrapper(cls):
+        COLLATOR[task] = cls
+        return cls
+
+    return wrapper
+
+
+def register_tokenizer(name):
+    def wrapper(cls):
+        TOKENIZER[name] = cls
+        return cls
+
+    return wrapper
+
+
+def register_task(name):
+    def wrapper(cls):
+        TASK[name] = cls
+
+    return wrapper
+
+
+def register_vectorizer(name):
+    def wrapper(cls):
+        VECTORIZER[name] = cls
+
+    return wrapper

@@ -9,8 +9,13 @@ import torch.distributed as dist
 from task.base_task import BaseTask
 import util.metric as sa_metrics
 
+from engine.registry import register_task
 
+
+@register_task("classification")
 class SentimentAnalysisTask(BaseTask):
+    allowed_flags = {"unidirectional", "bidirectional", "transformer"}
+
     @property
     def name(self):
         return "sentiment_analysis"

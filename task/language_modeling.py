@@ -11,9 +11,33 @@ import torch.distributed as dist
 
 from task.base_task import BaseTask
 import util.metric as lm_metrics
+from engine.registry import register_task
 
 
+# TODO: task class should provide the dataset num classes,or vocab size
+# eg:
+# @register_task("classification")
+# class ClassificationTask:
+#     allowed_flags = {"unidirectional", "bidirectional", "transformer"}
+#
+#     def get_output_dim(self, dataset_bundle):
+#         return dataset_bundle.num_classes
+
+
+# or for language modeling task
+# @register_task("language_modeling")
+# class LanguageModelingTask:
+#     # forbid bidirectional models
+#     allowed_flags = {"causal", "unidirectional"}
+#
+#     def get_output_dim(self, dataset_bundle):
+#         return len(dataset_bundle.vocab)
+
+
+@register_task("language_modeling")
 class LanguageModelingTask(BaseTask):
+    allowed_flags = {"causal", "unidirectional"}
+
     @property
     def name(self):
         return "language_modeling"

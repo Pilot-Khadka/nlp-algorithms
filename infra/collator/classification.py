@@ -5,8 +5,10 @@ from torch import Tensor
 from torch.nn.utils.rnn import pad_sequence
 
 from infra.collator import BaseCollator
+from engine.registry import register_collator
 
 
+@register_collator("classification")
 class ClassificationCollator(BaseCollator):
     def __init__(
         self,
@@ -85,9 +87,9 @@ if __name__ == "__main__":
 
     cfg = {
         "dataset": {
+            "name": "imdb",
             "data_dir": "../../dataset/dataset_imdb/",
             "url": "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz",
-            "archive_name": "aclImdb_v1.tar.gz",
         }
     }
 

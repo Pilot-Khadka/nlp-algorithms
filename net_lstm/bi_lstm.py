@@ -6,7 +6,7 @@ from engine.registry import register_model
 from engine.model_factory import BaseModel
 
 
-@register_model("lstm", "bidirectional")
+@register_model("lstm", flags=["bidirectional"])
 class BiLSTM(BaseModel):
     def __init__(
         self,

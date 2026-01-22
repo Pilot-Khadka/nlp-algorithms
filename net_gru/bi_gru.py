@@ -5,7 +5,7 @@ from net_gru.gru_cell import GRUCell
 from engine.registry import register_model
 
 
-@register_model("gru", "bidirectional")
+@register_model("gru", flags=["bidirectional"])
 class BiGru(nn.Module):
     def __init__(
         self,

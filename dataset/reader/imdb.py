@@ -1,9 +1,14 @@
-import os
 from typing import Dict, List
-from torch.utils.data import Dataset
+
+import os
 from tqdm import tqdm
 
+from torch.utils.data import Dataset
 
+from engine.registry import register_dataset
+
+
+@register_dataset("imdb")
 class IMDBDataset(Dataset):
     def __init__(self, data_dir: str, split: str):
         self.data_dir = data_dir

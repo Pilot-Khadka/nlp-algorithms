@@ -7,7 +7,7 @@ torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.deterministic = False
 
 
-@register_model("lstm")
+@register_model("lstm", flags=["unidirectional"])
 class LSTM(nn.Module):
     def __init__(
         self,
