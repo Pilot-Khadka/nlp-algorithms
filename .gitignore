@@ -1,7 +1,6 @@
 tests/
 /.idea
 *.tar
-.pre-commit-config.yaml
 .env
 track_progress.txt
 test.py
@@ -10,7 +9,6 @@ datasets/dataset*
 backup
 *.txt
 *.json
-dataset_*
 
 
 

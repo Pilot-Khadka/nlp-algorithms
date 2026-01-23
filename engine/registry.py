@@ -7,6 +7,8 @@ COLLATOR: Dict = {}
 TOKENIZER: Dict = {}
 VECTORIZER: Dict = {}
 TASK: Dict = {}
+TRAINER_REGISTRY: Dict = {}
+DOWNLOADER: Dict = {}
 
 
 def register_model(name, *, flags=None):
@@ -54,5 +56,19 @@ def register_task(name):
 def register_vectorizer(name):
     def wrapper(cls):
         VECTORIZER[name] = cls
+
+    return wrapper
+
+
+def register_trainer(name):
+    def wrapper(cls):
+        TRAINER_REGISTRY[name] = cls
+
+    return wrapper
+
+
+def register_downloader(name):
+    def wrapper(cls):
+        DOWNLOADER[name] = cls
 
     return wrapper
