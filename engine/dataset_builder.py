@@ -75,9 +75,7 @@ class DatasetBundleBuilder:
             split="test",
         )
 
-        tokenizer_cls = get_from_registry(
-            TOKENIZER_REGISTRY, config.dataset.tokenizer.name
-        )
+        tokenizer_cls = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
         tokenizer = tokenizer_cls()
         token_vocab = build_token_vocab(train, tokenizer)
 

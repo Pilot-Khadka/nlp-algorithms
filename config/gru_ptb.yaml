@@ -11,6 +11,10 @@ dataset:
   pin_memory: true
   prefetch_factor: 2
 
+tokenizer:
+  name: whitespace
+
+
 model:
   name: gru
   input_dim: 300

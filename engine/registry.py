@@ -2,8 +2,8 @@ from typing import Dict, Any, Optional, FrozenSet, Callable
 import importlib
 import pkgutil
 
-_REGISTRY: Dict[str, Dict] = {}
-
+_REGISTRY: Dict[str, Any] = {}
+RegistryEntry = Dict[str, Any]
 
 # def _create_register(category: str) -> Callable:
 #     def register(name: str, *, flags=None):
@@ -74,7 +74,7 @@ def autoregister():
 
 
 def get_from_registry(
-    registry: Dict[str, Dict[FrozenSet[str], Any]],
+    registry: Dict[str, RegistryEntry],
     name: str,
     flags: Optional[list[str]] = None,
 ) -> Any:
@@ -85,19 +85,23 @@ def get_from_registry(
 
     flags_set = frozenset(flags or [])
 
-    # if no flags, only allow if exactly one variant exists
+    # if no flags, try 'default' first
     if not flags_set:
-        if len(entry) == 1:
-            return next(iter(entry.values()))
+        if "default" in entry:
+            return entry["default"]
+        # fallback to variants
+        variants = entry.get("variants", {})
+        if len(variants) == 1:
+            return next(iter(variants.values()))
         raise KeyError(
-            f"Multiple variants found for {name}; flags required. Available: {list(entry.keys())}"
+            f"Multiple variants found for {name}; flags required. Available: {list(variants.keys())}"
         )
 
-    # if flags provided, direct lookup
-    obj = entry.get(flags_set)
+    # if flags provided, look up inside 'variants'
+    obj = entry.get("variants", {}).get(flags_set)
     if obj is None:
         raise KeyError(
             f"No variant found for {name} with flags {flags_set}. "
-            f"Available: {list(entry.keys())}"
+            f"Available: {list(entry.get('variants', {}).keys())}"
         )
     return obj
