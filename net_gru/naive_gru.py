@@ -1,9 +1,8 @@
 import torch
 import torch.nn as nn
-from engine.model_factory import BaseModel
 
 
-class GRUNaive(BaseModel):
+class GRUNaive(nn.Module):
     def __init__(self, embedding_dim, hidden_dim, output_dim, **kwargs):
         super().__init__()
 

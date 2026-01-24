@@ -10,37 +10,23 @@ from engine.registry import register_collator
 
 @register_collator("classification")
 class ClassificationCollator(BaseCollator):
-    def __init__(
-        self,
-        tokenizer,
-        vocab,
-        max_len: int = 128,
-        architecture: str = "transformer",
-    ):
+    def __init__(self, vocab, architecture="transformer"):
         super().__init__()
-        self.tokenizer = tokenizer
         self.vocab = vocab
-        self.max_len = max_len
         self.architecture = architecture
 
     def collate(self, batch: List[Dict[str, Any]]) -> Dict[str, Tensor]:
-        texts = [item["text"] for item in batch]
+        encoded = [item["input_ids"] for item in batch]
         labels = [item["label"] for item in batch]
 
-        tokenized = [self.tokenizer.tokenize(text) for text in texts]
-        encoded = [self.vocab.encode(tokens)[: self.max_len] for tokens in tokenized]
-
-        if self.architecture == "rnn":
-            return self._collate_rnn(encoded, labels)
-        else:
+        if self.architecture == "transformer":
             return self._collate_transformer(encoded, labels)
+        else:
+            return self._collate_rnn(encoded, labels)
 
-    def _collate_rnn(
-        self, encoded: List[List[int]], labels: List[int]
-    ) -> Dict[str, Tensor]:
+    def _collate_rnn(self, encoded, labels):
         lengths = [len(seq) for seq in encoded]
 
-        # descending for pack_padded_sequence
         sorted_indices = sorted(
             range(len(lengths)), key=lambda i: lengths[i], reverse=True
         )
@@ -48,7 +34,7 @@ class ClassificationCollator(BaseCollator):
         labels = [labels[i] for i in sorted_indices]
         lengths = [lengths[i] for i in sorted_indices]
 
-        sequences = [torch.tensor(seq, dtype=torch.long) for seq in encoded]
+        sequences = [torch.tensor(x, dtype=torch.long) for x in encoded]
         input_ids = pad_sequence(
             sequences, batch_first=True, padding_value=self.vocab.pad_id
         )
@@ -59,10 +45,8 @@ class ClassificationCollator(BaseCollator):
             "labels": torch.tensor(labels, dtype=torch.long),
         }
 
-    def _collate_transformer(
-        self, encoded: List[List[int]], labels: List[int]
-    ) -> Dict[str, Tensor]:
-        sequences = [torch.tensor(seq, dtype=torch.long) for seq in encoded]
+    def _collate_transformer(self, encoded, labels):
+        sequences = [torch.tensor(x, dtype=torch.long) for x in encoded]
         input_ids = pad_sequence(
             sequences, batch_first=True, padding_value=self.vocab.pad_id
         )
@@ -110,9 +94,7 @@ if __name__ == "__main__":
     print("Vocab size:", len(vocab))
 
     collator = ClassificationCollator(
-        tokenizer=tokenizer,
         vocab=vocab,
-        max_len=128,
         architecture="transformer",
     )
 

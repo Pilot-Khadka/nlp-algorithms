@@ -1,10 +1,10 @@
 import torch
 
 
-def get_optimizer(model, cfg):
-    opt_type = getattr(cfg.train, "optimizer", "adamw").lower()
-    lr = cfg.train.learning_rate
-    wd = getattr(cfg.train, "weight_decay", 0.01)
+def get_optimizer(model, train_config):
+    opt_type = getattr(train_config, "optimizer", "adamw").lower()
+    lr = train_config.learning_rate
+    wd = getattr(train_config, "weight_decay", 0.01)
 
     if opt_type == "asgd":
         optimizer = torch.optim.ASGD(

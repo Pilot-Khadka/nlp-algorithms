@@ -5,11 +5,15 @@ dataset:
   url: "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
   archive_name: aclImdb_v1.tar.gz
 
+
+tokenizer:
+  name: whitespace
+
+dataloader:
   use_cache: true
   num_workers: auto
   pin_memory: true
   prefetch_factor: 2
-
 
 model:
   name: gru
@@ -20,17 +24,17 @@ model:
   bidirectional: true
   weight_tying: false
 
-task:
-  name: sentiment_analysis
-  metrics:
-    - accuracy
-    - f1_score
-    - precision
-    - recall
-
 train:
   epochs: 15
   batch_size: 64
   multi_gpu: true
   learning_rate: 1e-3
   grad_clip: 5.0
+
+task:
+  name: classification
+  metrics:
+    - accuracy
+    - f1_score
+    - precision
+    - recall

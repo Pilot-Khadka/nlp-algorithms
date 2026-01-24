@@ -3,7 +3,6 @@ from typing import Dict, Any
 
 import os
 import tarfile
-import shutil
 import threading
 from filelock import FileLock
 import torch.distributed as dist
@@ -12,7 +11,10 @@ from urllib.parse import urlparse
 from util.multi_gpu import is_rank0
 from util.data import download_file
 
+from engine.registry import register_downloader
 
+
+@register_downloader("imdb")
 class ImdbDownloader:
     _thread_lock = threading.Lock()
 

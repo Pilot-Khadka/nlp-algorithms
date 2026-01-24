@@ -2,13 +2,13 @@ from typing import Dict, List
 
 import os
 from tqdm import tqdm
-
 from torch.utils.data import Dataset
 
-from engine.registry import register_dataset
+
+from engine.registry import register_reader
 
 
-@register_dataset("imdb")
+@register_reader("imdb")
 class IMDBDataset(Dataset):
     def __init__(self, data_dir: str, split: str):
         self.data_dir = data_dir

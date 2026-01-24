@@ -12,10 +12,8 @@ def load_yaml(path):
         return yaml.safe_load(f)
 
 
-def get_num_workers(cfg) -> int:
+def get_num_workers(num_workers) -> int:
     import multiprocessing
-
-    num_workers = cfg.dataset.get("num_workers", None)
 
     if isinstance(num_workers, int) and num_workers > 0:
         return num_workers

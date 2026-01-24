@@ -3,11 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from engine.registry import register_model
-from engine.model_factory import BaseModel
 
 
 @register_model("lstm", flags=["bidirectional"])
-class BiLSTM(BaseModel):
+class BiLSTM(nn.ModuleList):
     def __init__(
         self,
         input_dim,

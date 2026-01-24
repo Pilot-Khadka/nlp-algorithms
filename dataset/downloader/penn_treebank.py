@@ -7,7 +7,10 @@ from filelock import FileLock
 from util.data import download_file
 from util.multi_gpu import is_rank0
 
+from engine.registry import register_downloader
 
+
+@register_downloader("ptb")
 class PTBDownloader:
     _thread_lock = threading.Lock()
 

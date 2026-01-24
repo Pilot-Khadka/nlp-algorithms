@@ -4,6 +4,14 @@ dataset:
   data_dir: dataset/dataset_imdb/
   url: "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
 
+  tokenizer:
+    name: "whitespace"
+
+  # vectorizer:
+  #   name: "tfidf"
+  #   max_features: 10000
+  #   min_df: 2
+
   use_cache: true
   num_workers: auto
   pin_memory: true

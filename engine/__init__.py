@@ -1,3 +1,3 @@
-from .registry import auto_register_models
+from .registry import autoregister
 
-auto_register_models()
+autoregister()

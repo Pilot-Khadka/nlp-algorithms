@@ -1,4 +1,9 @@
-from engine.registry import DATASET_READER, DOWNLOADER, TOKENIZER
+from engine.registry import (
+    get_from_registry,
+    DATA_READER_REGISTRY,
+    DOWNLOADER_REGISTRY,
+    TOKENIZER_REGISTRY,
+)
 from infra.vocabulary import Vocabulary
 
 
@@ -51,24 +56,29 @@ def build_token_vocab_from_key(train, tokenizer, key):
 
 class DatasetBundleBuilder:
     def build(self, config):
-        data_downloader = DOWNLOADER[config.dataset.name]
-        data_downloader.download_and_prepare(config)
+        data_downloader_cls = get_from_registry(
+            DOWNLOADER_REGISTRY, config.dataset.name
+        )
+        data_dir = data_downloader_cls().download_and_prepare(config)
 
-        data_reader = DATASET_READER[config.dataset.name]
-        train = data_reader(
-            data_dir=config.dataset.data_dir,
+        data_reader_cls = get_from_registry(DATA_READER_REGISTRY, config.dataset.name)
+        train = data_reader_cls(
+            data_dir=data_dir,
             split="train",
         )
-        val = data_reader(
-            data_dir=config.dataset.data_dir,
-            split="val",
-        )
-        test = data_reader(
-            data_dir=config.dataset.data_dir,
+        # val = data_reader_cls(
+        #     data_dir=data_dir,
+        #     split="val",
+        # )
+        test = data_reader_cls(
+            data_dir=data_dir,
             split="test",
         )
 
-        tokenizer = TOKENIZER[config.dataset.tokenizer.name]
+        tokenizer_cls = get_from_registry(
+            TOKENIZER_REGISTRY, config.dataset.tokenizer.name
+        )
+        tokenizer = tokenizer_cls()
         token_vocab = build_token_vocab(train, tokenizer)
 
         label_vocab = None
@@ -79,13 +89,13 @@ class DatasetBundleBuilder:
             label_vocab = build_label_vocab(train, key="label")
 
         elif config.task.name == "translation":
-            # For MT, text is in "src" and "tgt" columns
+            # for MT, text is in "src" and "tgt" columns
             src_vocab = build_token_vocab_from_key(train, tokenizer, key="src")
             tgt_vocab = build_token_vocab_from_key(train, tokenizer, key="tgt")
 
         return DatasetBundle(
             train_dataset=train,
-            val_dataset=val,
+            val_dataset=test,
             test_dataset=test,
             token_vocab=token_vocab,
             label_vocab=label_vocab,

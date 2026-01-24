@@ -1,74 +1,103 @@
-from typing import Dict
+from typing import Dict, Any, Optional, FrozenSet, Callable
+import importlib
+import pkgutil
+
+_REGISTRY: Dict[str, Dict] = {}
 
 
-MODEL_REGISTRY: Dict = {}
-DATASET_READER: Dict = {}
-COLLATOR: Dict = {}
-TOKENIZER: Dict = {}
-VECTORIZER: Dict = {}
-TASK: Dict = {}
-TRAINER_REGISTRY: Dict = {}
-DOWNLOADER: Dict = {}
+# def _create_register(category: str) -> Callable:
+#     def register(name: str, *, flags=None):
+#         flags = frozenset(flags or [])
+#
+#         def decorator(obj):
+#             _REGISTRY.setdefault(category, {}).setdefault(name, {})[flags] = obj
+#             return obj
+#
+#         return decorator
+#
+#     return register
 
 
-def register_model(name, *, flags=None):
-    """flags define model capabilities"""
-    flags = frozenset(flags or [])
+def _create_register(category: str) -> Callable:
+    def register(name: str, *, flags=None):
+        flags = frozenset(flags or [])
 
-    def decorator(cls):
-        MODEL_REGISTRY.setdefault(name, {})[flags] = cls
-        return cls
+        def decorator(obj):
+            entry = _REGISTRY.setdefault(category, {}).setdefault(name, {})
+            if not flags:
+                entry["default"] = obj
+            else:
+                entry.setdefault("variants", {})[flags] = obj
+            return obj
 
-    return decorator
+        return decorator
 
-
-def register_dataset(name):
-    def wrapper(cls):
-        DATASET_READER[name] = cls
-        return cls
-
-    return wrapper
+    return register
 
 
-def register_collator(task):
-    def wrapper(cls):
-        COLLATOR[task] = cls
-        return cls
-
-    return wrapper
-
-
-def register_tokenizer(name):
-    def wrapper(cls):
-        TOKENIZER[name] = cls
-        return cls
-
-    return wrapper
+MODEL_REGISTRY = _REGISTRY.setdefault("model", {})
+DATA_READER_REGISTRY = _REGISTRY.setdefault("data_reader", {})
+COLLATOR_REGISTRY = _REGISTRY.setdefault("collator", {})
+TOKENIZER_REGISTRY = _REGISTRY.setdefault("tokenizer", {})
+VECTORIZER_REGISTRY = _REGISTRY.setdefault("vectorizer", {})
+TASK_REGISTRY = _REGISTRY.setdefault("task", {})
+TRAINER_REGISTRY = _REGISTRY.setdefault("trainer", {})
+DOWNLOADER_REGISTRY = _REGISTRY.setdefault("downloader", {})
 
 
-def register_task(name):
-    def wrapper(cls):
-        TASK[name] = cls
-
-    return wrapper
-
-
-def register_vectorizer(name):
-    def wrapper(cls):
-        VECTORIZER[name] = cls
-
-    return wrapper
+register_model = _create_register("model")
+register_reader = _create_register("data_reader")
+register_collator = _create_register("collator")
+register_tokenizer = _create_register("tokenizer")
+register_vectorizer = _create_register("vectorizer")
+register_task = _create_register("task")
+register_trainer = _create_register("trainer")
+register_downloader = _create_register("downloader")
 
 
-def register_trainer(name):
-    def wrapper(cls):
-        TRAINER_REGISTRY[name] = cls
+def autoregister():
+    """used to discover registerable files (do not delete)"""
+    import sys
+    import pathlib
 
-    return wrapper
+    root = pathlib.Path(__file__).resolve().parent.parent
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
+    for module in pkgutil.walk_packages(path=[str(root)]):
+        if module.ispkg:
+            continue  # skip packages, only import .py files
+        try:
+            importlib.import_module(module.name)
+        except Exception as e:
+            print(f"[WARN] Skipped {module.name}: {e}")
 
 
-def register_downloader(name):
-    def wrapper(cls):
-        DOWNLOADER[name] = cls
+def get_from_registry(
+    registry: Dict[str, Dict[FrozenSet[str], Any]],
+    name: str,
+    flags: Optional[list[str]] = None,
+) -> Any:
+    """Get a class/function from any registry by name and optional flags."""
+    entry = registry.get(name)
+    if entry is None:
+        raise KeyError(f"{name} not found in registry")
 
-    return wrapper
+    flags_set = frozenset(flags or [])
+
+    # if no flags, only allow if exactly one variant exists
+    if not flags_set:
+        if len(entry) == 1:
+            return next(iter(entry.values()))
+        raise KeyError(
+            f"Multiple variants found for {name}; flags required. Available: {list(entry.keys())}"
+        )
+
+    # if flags provided, direct lookup
+    obj = entry.get(flags_set)
+    if obj is None:
+        raise KeyError(
+            f"No variant found for {name} with flags {flags_set}. "
+            f"Available: {list(entry.keys())}"
+        )
+    return obj
