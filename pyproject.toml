@@ -25,7 +25,8 @@ packages = [
     "dataset",
     "engine",
     "task",
-    "infra"
+    "infra",
+    "training"
 ]
 
 [tool.pyrefly]

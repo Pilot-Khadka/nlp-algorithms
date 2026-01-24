@@ -19,7 +19,7 @@ def cleanup():
     dist.destroy_process_group()
 
 
-def train_worker(rank: int, world_size: int, config, device):
+def train_worker(rank: int, world_size: int, config):
     """
     description: worker function for distributed training on a single GPU.
 
@@ -39,7 +39,6 @@ def train_worker(rank: int, world_size: int, config, device):
 
         pipeline = TrainerBuilder(
             config=config,
-            device=device,
             gpu_id=rank,
             use_ddp=True,
         ).build()
@@ -78,7 +77,6 @@ def train_single_gpu(config, gpu_id: int = 0):
     logger.info("Building training pipeline...")
     pipeline = TrainerBuilder(
         config=config,
-        device=device,
         gpu_id=gpu_id,
         use_ddp=False,
     ).build()
@@ -103,8 +101,8 @@ def prepare_datasets_before_spawn(config):
     print("=" * 60)
     print("Preparing datasets in main process before spawning workers...")
 
-    dataset_class = DOWNLOADER_REGISTRY[config.dataset.name]
-    dataset_class.download_and_prepare(config)
+    dataset_class = get_from_registry(DOWNLOADER_REGISTRY, config.dataset.name)
+    dataset_class().download_and_prepare(config)
 
     print("Datasets ready!")
     print("=" * 60)
@@ -120,7 +118,6 @@ def run_training(config):
     """
     multi_gpu = config.train.get("multi_gpu", False)
     gpu_id = config.get("gpu_id", 0)
-    device = torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
 
     if multi_gpu and torch.cuda.is_available():
         world_size = torch.cuda.device_count()
@@ -133,7 +130,7 @@ def run_training(config):
             print(f"Spawning {world_size} training workers...")
             mp.spawn(
                 train_worker,
-                args=(world_size, config, device),
+                args=(world_size, config),
                 nprocs=world_size,
                 join=True,
             )

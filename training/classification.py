@@ -31,6 +31,7 @@ class ClassificationTrainer(BaseTrainer):
                 self.train_loader,
                 desc=f"Epoch {epoch + 1}/{total_epochs} [Train]",
                 leave=False,
+                ncols=120,
             )
         else:
             train_progress = self.train_loader
@@ -76,13 +77,10 @@ class ClassificationTrainer(BaseTrainer):
             if self.is_main and hasattr(train_progress, "set_postfix"):
                 avg_loss = total_train_loss / total_samples
                 avg_acc = correct_predictions / total_samples
-                cast(tqdm, train_progress).set_postfix(
-                    {
-                        "Loss": f"{loss.item():.4f}",
-                        "Avg Loss": f"{avg_loss:.4f}",
-                        "Acc": f"{avg_acc:.4f}",
-                    }
+                short_metrics = self._tqdm_format_metrics(
+                    {"Loss": loss.item(), "AvgLoss": avg_loss, "Acc": avg_acc}
                 )
+                cast(tqdm, train_progress).set_postfix_str(short_metrics)
 
         avg_train_loss = total_train_loss / total_samples if total_samples > 0 else 0.0
 
@@ -153,12 +151,10 @@ class ClassificationTrainer(BaseTrainer):
 
                 if self.is_main and hasattr(valid_progress, "set_postfix"):
                     avg_loss = total_valid_loss / total_samples
-                    cast(tqdm, valid_progress).set_postfix(
-                        {
-                            "Val Loss": f"{loss_value:.4f}",
-                            "Avg Val Loss": f"{avg_loss:.4f}",
-                        }
+                    short_metrics = self._tqdm_format_metrics(
+                        {"ValLoss": loss_value, "AvgValLoss": avg_loss}
                     )
+                    cast(tqdm, valid_progress).set_postfix_str(short_metrics)
 
         # concatenate per-rank
         all_logits = torch.cat(all_logits, dim=0)

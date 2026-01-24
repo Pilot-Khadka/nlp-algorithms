@@ -5,6 +5,7 @@ This can be solved by shuffling the train dataset but need to check for language
 
 from abc import ABC, abstractmethod
 
+import torch
 import torch.distributed as dist
 
 from util.metric import MetricsTracker
@@ -16,14 +17,14 @@ class BaseTrainer(ABC):
         self,
         config,
         builder,
-        device,
         gpu_id: int = 0,
         use_ddp: bool = False,
     ):
         self.config = config
         self.logger = setup_logging()
-        self.device = device
-
+        self.device = torch.device(  # type: ignore[assignment]
+            f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu"
+        )
         self.gpu_id = gpu_id
         self.use_ddp = use_ddp
         self.is_main = not use_ddp or gpu_id == 0
@@ -64,6 +65,20 @@ class BaseTrainer(ABC):
             if self.use_ddp:
                 dist.barrier()
 
+    def _tqdm_format_metrics(self, metrics: dict, max_items: int = 3) -> str:
+        if not metrics:
+            return ""
+
+        items = list(metrics.items())[:max_items]
+
+        parts = [f"{k}={v:.4f}" for k, v in items]
+        result = " | ".join(parts)
+
+        if len(result) > 45:
+            result = result[:42] + "..."
+
+        return result
+
     def _log_epoch_results(
         self, epoch: int, train_loss: float, valid_loss: float, metrics: dict
     ) -> None:
@@ -74,7 +89,12 @@ class BaseTrainer(ABC):
             f"Valid Loss: {valid_loss:.4f}, "
             f"{metrics_str}"
         )
-        self.metrics_tracker.print_summary(epoch + 1, "Validation")
+
+        print("\n" + "-" * 70)
+        print(f"Epoch {epoch + 1} [Validation] Metrics")
+        print("-" * 70)
+        print(self.metrics_tracker.format_metrics(metrics))
+        print("-" * 70)
 
     @abstractmethod
     def train_one_epoch(self, epoch: int, total_epochs: int) -> float:

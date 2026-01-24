@@ -1,9 +1,8 @@
-from util.util import load_config
-from training.train_orchestrator import run_training
-
-
 def main():
-    config = load_config(path="config/bigru_imdb.yaml")
+    from util.util import load_config
+    from training.train_orchestrator import run_training
+
+    config = load_config(path="config/gru_ptb.yaml")
     run_training(config)
 
 

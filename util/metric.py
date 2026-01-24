@@ -62,15 +62,19 @@ class MetricsTracker:
 
         formatted: list[str] = []
         for name, value in sorted(metrics.items()):
-            formatted.append(f"{name}: {value:.4f}")
+            formatted.append(f"{name}\t{value:.4f}")
 
-        result = ", ".join(formatted)
+        result = "\t".join(formatted)
         return f"{prefix}{result}" if prefix else result
 
     def print_summary(self, epoch: int, phase: str = "Valid") -> None:
         averages = self.get_averages()
-        print(f"\nEpoch {epoch} [{phase}] Metrics:")
-        print(self.format_metrics(averages, prefix="  "))
+
+        print("\n" + "-" * 70)
+        print(f"Epoch {epoch} [{phase}] Metrics")
+        print("-" * 70)
+
+        print(self.format_metrics(averages, prefix=""))
 
     def get_metric(self, metric_name: str) -> Optional[float]:
         averages = self.get_averages()
@@ -108,13 +112,13 @@ def accuracy(context: MetricContext) -> float:
 
 
 def precision(context: MetricContext) -> float:
-    """macro-aveeraged"""
+    """description: macro-aveeraged"""
 
     predictions = context.get("predictions")
     targets = context.get("targets")
-    print(f"Total Samples: {targets.size(0)}")
-    print(f"Predicted as Positive (1): {(predictions == 1).sum().item()}")
-    print(f"Actually Positive (1): {(targets == 1).sum().item()}")
+    # print(f"Total Samples: {targets.size(0)}")
+    # print(f"Predicted as Positive (1): {(predictions == 1).sum().item()}")
+    # print(f"Actually Positive (1): {(targets == 1).sum().item()}")
 
     if predictions is None:
         outputs = context["outputs"]

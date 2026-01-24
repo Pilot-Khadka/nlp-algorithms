@@ -21,6 +21,8 @@ model:
   hidden_dim: 256
   num_layers: 1
   dropout: 0.5
+
+  # flags follow bool format
   bidirectional: true
   weight_tying: false
 

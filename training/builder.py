@@ -41,14 +41,15 @@ class TrainerBuilder:
     def __init__(
         self,
         config,
-        device,
         gpu_id: int = 0,
         use_ddp: bool = False,
     ):
         self.config = config
         self.gpu_id = gpu_id
         self.use_ddp = use_ddp
-        self.device = device
+        self.device = torch.device(  # type: ignore[assignment]
+            f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu"
+        )
 
     def build(self) -> TrainerBundle:
         task = self._build_task()

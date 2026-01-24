@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from trans_attention import MultiHeadAttention
-from common import PositionalEncoding
+from net_common import PositionalEncoding
 
 
 class FeedForward(nn.Module):

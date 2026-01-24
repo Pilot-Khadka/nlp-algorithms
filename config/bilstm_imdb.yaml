@@ -10,6 +10,8 @@ dataset:
   pin_memory: true
   prefetch_factor: 2
 
+tokenizer:
+  name: whitespace
 
 model:
   name: lstm
@@ -21,7 +23,7 @@ model:
   weight_tying: false
 
 task:
-  name: sentiment_analysis
+  name: classification
   metrics:
     - accuracy
     - f1_score
