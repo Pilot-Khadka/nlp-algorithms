@@ -1,10 +1,12 @@
-from typing import List, Dict
+from typing import Dict
 
 import os
-
 from torch.utils.data import Dataset
 
+from engine.registry import register_reader
 
+
+@register_reader("ptb")
 class PTBDataset(Dataset):
     def __init__(self, data_dir: str, split: str):
         self.data_dir = data_dir

@@ -4,13 +4,14 @@ from engine.registry import register_task
 
 @register_task("language_modeling")
 class LMTask(BaseTask):
-    allowed_flags = {"unidirectional", "causal"}
+    allowed_flags = {"unidirectional", "causal", "weight_tying"}
 
     @staticmethod
     def get_output_dim(dataset_bundle):
         return len(dataset_bundle.vocab)
 
-    def get_loss(self, pad_idx=0):
+    @staticmethod
+    def get_loss(pad_idx=0):
         import torch.nn as nn
 
         return nn.CrossEntropyLoss(ignore_index=pad_idx)

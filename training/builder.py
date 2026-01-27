@@ -9,7 +9,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.parallel import DataParallel, DistributedDataParallel
 from torch.optim.lr_scheduler import _LRScheduler, ReduceLROnPlateau
 
-from infra.preprocess import PreprocessedDataset
+from infra.preprocessor import PreprocessedDataset
 from engine.registry import (
     TASK_REGISTRY,
     COLLATOR_REGISTRY,
@@ -30,8 +30,8 @@ class TrainerBundle:
     model: ModelLike
     optimizer: torch.optim.Optimizer
     scheduler: SchedulerLike
-    train_loader: DataLoader
-    test_loader: DataLoader
+    train_loader: Any  # can be both Dataloader and iterator
+    test_loader: Any  # can be both dataloader and iterator
     task: Any
     criterion: torch.nn.Module
     metric_names: list
@@ -114,7 +114,48 @@ class TrainerBuilder:
             )
         return None
 
-    def _build_dataloaders(self, data_bundle) -> tuple[DataLoader, DataLoader]:
+    def _is_language_modeling_task(self) -> bool:
+        return self.config.task.name == "language_modeling"
+
+    def _build_dataloaders(self, data_bundle):
+        if self._is_language_modeling_task():
+            return self._build_language_modeling_loaders(data_bundle)
+
+        return self._build_standard_dataloaders(data_bundle)
+
+    def _build_language_modeling_loaders(self, data_bundle):
+        tokenizer = get_from_registry(TOKENIZER_REGISTRY, self.config.tokenizer.name)
+        collator_class = get_from_registry(COLLATOR_REGISTRY, self.config.task.name)
+
+        train_iterator = collator_class(
+            base_dataset=data_bundle.train,
+            tokenizer=tokenizer,
+            vocab=data_bundle.vocab,
+            batch_size=self.config.train.batch_size,
+            seq_len=self.config.dataset.sequence_length,
+            device=self.device,
+            batch_first=True,
+        )
+
+        test_iterator = collator_class(
+            base_dataset=data_bundle.test,
+            tokenizer=tokenizer,
+            vocab=data_bundle.vocab,
+            batch_size=self.config.train.batch_size,
+            seq_len=self.config.dataset.sequence_length,
+            device=self.device,
+            batch_first=True,
+        )
+
+        if self.use_ddp:
+            print("Warning: DDP is not supported with language modeling iterators.")
+            print(
+                "Consider implementing custom distributed logic for language modeling."
+            )
+
+        return train_iterator, test_iterator
+
+    def _build_standard_dataloaders(self, data_bundle) -> tuple[DataLoader, DataLoader]:
         tokenizer = get_from_registry(TOKENIZER_REGISTRY, self.config.tokenizer.name)
 
         processed_train = PreprocessedDataset(
@@ -122,6 +163,7 @@ class TrainerBuilder:
             tokenizer,
             data_bundle.vocab,
             max_len=self.config.dataset.sequence_length,
+            task=self.config.task.name,
         )
 
         processed_test = PreprocessedDataset(
@@ -129,6 +171,7 @@ class TrainerBuilder:
             tokenizer,
             data_bundle.vocab,
             max_len=self.config.dataset.sequence_length,
+            task=self.config.task.name,
         )
 
         collator = get_from_registry(COLLATOR_REGISTRY, self.config.task.name)(

@@ -5,12 +5,30 @@ downloader -> reader  -> preprocessor(tokenize+encode) -> dataloader -> collator
 import torch
 
 
+class ClassificationBuilder:
+    def build(self, example):
+        return {"input_ids": example["input_ids"], "label": example["label"]}
+
+
+class LanguageModelingBuilder:
+    def build(self, example):
+        return {"input_ids": example["input_ids"]}
+
+
 class PreprocessedDataset(torch.utils.data.Dataset):
-    def __init__(self, base_dataset, tokenizer, vocab, max_len=128):
+    def __init__(
+        self,
+        base_dataset,
+        tokenizer,
+        vocab,
+        task,
+        max_len=128,
+    ):
         self.base = base_dataset
         self.tokenizer = tokenizer()
         self.vocab = vocab
         self.max_len = max_len
+        self.task = task
 
     def __len__(self):
         return len(self.base)

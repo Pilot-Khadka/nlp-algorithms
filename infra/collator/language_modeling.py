@@ -1,43 +1,44 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 import torch
 from torch import Tensor
 from torch.nn.utils.rnn import pad_sequence
 
 from infra.collator import BaseCollator
+# from engine.registry import register_collator
 
-from engine.registry import register_collator
 
-
-@register_collator("language_modeling")
+# @register_collator("language_modeling")
 class LanguageModelingCollator(BaseCollator):
-    """Collator for language modeling (next token prediction)."""
-
     def __init__(
         self,
-        tokenizer,
         vocab,
-        max_len: int = 128,
         architecture: str = "transformer",
+        batch_size: Optional[int] = None,
+        seq_len: Optional[int] = None,
     ):
         super().__init__()
-        self.tokenizer = tokenizer
         self.vocab = vocab
-        self.max_len = max_len
         self.architecture = architecture
 
+        if batch_size is None or seq_len is None:
+            raise ValueError(
+                "corpus_mode=True requires batch_size and seq_len parameters"
+            )
+        self.batch_size = batch_size
+        self.seq_len = seq_len
+        self.corpus_data = None  # will hold batchified data
+        self.position = 0
+
     def collate(self, batch: List[Dict[str, Any]]) -> Dict[str, Tensor]:
-        texts = [item["text"] for item in batch]
-
-        tokenized = [self.tokenizer.tokenize(text) for text in texts]
-        encoded = [self.vocab.encode(tokens)[: self.max_len] for tokens in tokenized]
-
-        if self.architecture == "rnn":
-            return self._collate_rnn(encoded)
-        else:
+        encoded = [item["input_ids"] for item in batch]
+        if self.architecture == "transformer":
             return self._collate_transformer(encoded)
+        else:
+            return self._collate_rnn(encoded)
 
     def _collate_rnn(self, encoded: List[List[int]]) -> Dict[str, Tensor]:
+        """description: RNN collation for independent sequences."""
         lengths = [len(seq) for seq in encoded]
 
         sorted_indices = sorted(
@@ -46,8 +47,6 @@ class LanguageModelingCollator(BaseCollator):
         encoded = [encoded[i] for i in sorted_indices]
         lengths = [lengths[i] for i in sorted_indices]
 
-        # Input: all tokens except last
-        # Labels: all tokens except first
         input_seqs = [
             torch.tensor(seq[:-1], dtype=torch.long) for seq in encoded if len(seq) > 1
         ]
@@ -69,8 +68,7 @@ class LanguageModelingCollator(BaseCollator):
         }
 
     def _collate_transformer(self, encoded: List[List[int]]) -> Dict[str, Tensor]:
-        # Input: all tokens except last
-        # Labels: all tokens except first (teacher forcing)
+        """description: Transformer collation for independent sequences."""
         input_seqs = [
             torch.tensor(seq[:-1], dtype=torch.long) for seq in encoded if len(seq) > 1
         ]
@@ -131,7 +129,7 @@ if __name__ == "__main__":
     print("Encoded:", encoded)
     print("Decoded:", decoded)
 
-    collator = LanguageModelingCollator(tokenizer, vocab, max_len=20)
+    collator = LanguageModelingCollator(vocab=vocab, seq_len=20)
     loader = DataLoader(
         test_dataset,
         batch_size=4,

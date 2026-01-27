@@ -6,49 +6,28 @@ import inspect
 from tqdm import tqdm
 
 import torch
-import torch.nn as nn
 import torch.distributed as dist
 
-from task.base import BaseTask
+from training.base import BaseTrainer
 import util.metric as lm_metrics
-from engine.registry import register_task
+from engine.registry import register_trainer
 
 
-@register_task("language_modeling")
-class LanguageModelingTask(BaseTask):
-    allowed_flags = {"causal", "unidirectional"}
+@register_trainer("language_modeling")
+class LanguageModelingTask(BaseTrainer):
+    def on_epoch_start(self) -> None:
+        """
+        description: resets model state for a fresh start on the data.
+        """
+        if hasattr(self.model, "reset_state"):
+            self.model.reset_state()
 
-    @property
-    def name(self):
-        return "language_modeling"
-
-    def get_output_spec(self, dataset_bundle):
-        return len(dataset_bundle.vocab)
-
-    def get_loss_fn(self, pad_idx=0):
-        return nn.CrossEntropyLoss(ignore_index=pad_idx)
-
-    def _is_ptb_iterator(self, loader) -> bool:
+    def _is_iterator(self, loader) -> bool:
         return hasattr(loader, "reset") and hasattr(loader, "pos")
 
     def _reset_loader(self, loader) -> None:
-        if self._is_ptb_iterator(loader):
+        if self._is_iterator(loader):
             loader.reset()
-
-    def _get_num_batches(self, loader) -> int:
-        return len(loader)
-
-    def on_epoch_start(self, model, training: bool = True) -> None:
-        """
-        Called at the start of each epoch.
-        Resets model state for a fresh start on the data.
-        """
-        if hasattr(model, "reset_state"):
-            model.reset_state()
-
-    def on_epoch_end(self, model, training: bool = True) -> None:
-        """Called at the end of each epoch."""
-        pass
 
     def _detach_hidden(self, hidden):
         if hidden is None:
@@ -61,48 +40,33 @@ class LanguageModelingTask(BaseTask):
             return tuple(self._detach_hidden(h) for h in hidden)
         return hidden
 
-    def train_one_epoch(
-        self,
-        model,
-        train_loader,
-        optimizer: torch.optim.Optimizer,
-        device: torch.device,
-        epoch: int,
-        total_epochs: int,
-        grad_clip: float,
-        use_ddp: bool = False,
-        is_main: bool = True,
-    ) -> float:
-        model.train()
-        criterion = self.get_loss_fn()
+    def train_one_epoch(self, epoch, total_epochs) -> float:
+        self.model.train()
 
-        is_ptb = self._is_ptb_iterator(train_loader)
-        if use_ddp and not is_ptb:
-            if hasattr(train_loader, "sampler") and hasattr(
-                train_loader.sampler, "set_epoch"
+        if self.use_ddp:
+            if hasattr(self.train_loader, "sampler") and hasattr(
+                self.train_loader.sampler, "set_epoch"
             ):
-                train_loader.sampler.set_epoch(epoch)
+                self.train_loader.sampler.set_epoch(epoch)
 
-        self.on_epoch_start(model, training=True)
-        self._reset_loader(train_loader)
-
+        self._reset_loader(self.train_loader)
         total_train_loss = 0.0
         total_tokens = 0
 
         train_progress: Union[Any, tqdm]
-        if is_main:
+        if self.is_main:
             train_progress = tqdm(
-                train_loader,
+                self.train_loader,
                 desc=f"Epoch {epoch + 1}/{total_epochs} [Train]",
                 leave=False,
             )
         else:
-            train_progress = train_loader
+            train_progress = self.train_loader
 
         hidden: Optional[Union[Tensor, List[Tensor], Tuple[Tensor, ...]]] = None
         cell: Optional[Union[Tensor, List[Tensor], Tuple[Tensor, ...]]] = None
 
-        forward_params = inspect.signature(model.forward).parameters
+        forward_params = inspect.signature(self.model.forward).parameters
         accepts_hidden = "hidden" in forward_params
         accepts_cell = "cell" in forward_params
 
@@ -110,13 +74,12 @@ class LanguageModelingTask(BaseTask):
             # For PTB iterator: x, y are (seq_len, batch_size) by default
             # For DataLoader: x, y are (batch_size, seq_len)
             inputs, targets = batch
-
-            inputs, targets = inputs.to(device), targets.to(device)
+            inputs, targets = inputs.to(self.device), targets.to(self.device)
 
             hidden = self._detach_hidden(hidden)
             cell = self._detach_hidden(cell)
 
-            optimizer.zero_grad()
+            self.optimizer.zero_grad()
 
             forward_kwargs = {}
             if accepts_hidden and hidden is not None:
@@ -124,7 +87,7 @@ class LanguageModelingTask(BaseTask):
             if accepts_cell and cell is not None:
                 forward_kwargs["cell"] = cell
 
-            outputs = model(inputs, **forward_kwargs)
+            outputs = self.model(inputs, **forward_kwargs)
 
             if isinstance(outputs, tuple):
                 logits, state = outputs
@@ -140,23 +103,25 @@ class LanguageModelingTask(BaseTask):
                 logits = outputs
                 hidden, cell = None, None
 
-            loss = criterion(
+            loss = self.criterion(
                 logits.view(-1, logits.size(-1)),
                 targets.view(-1),
             )
             loss.backward()
 
-            if grad_clip:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
+            if self.grad_clip:
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), max_norm=self.grad_clip
+                )
 
-            optimizer.step()
+            self.optimizer.step()
 
             loss_value = loss.item()
             batch_tokens = targets.numel()
             total_train_loss += loss_value * batch_tokens
             total_tokens += batch_tokens
 
-            if is_main and hasattr(train_progress, "set_postfix"):
+            if self.is_main and hasattr(train_progress, "set_postfix"):
                 avg_loss = total_train_loss / total_tokens
                 cast(tqdm, train_progress).set_postfix(
                     {
@@ -166,51 +131,40 @@ class LanguageModelingTask(BaseTask):
                     }
                 )
 
-        self.on_epoch_end(model, training=True)
-
         avg_train_loss = total_train_loss / total_tokens if total_tokens > 0 else 0.0
 
-        if use_ddp:
-            loss_tensor = torch.tensor([total_train_loss, total_tokens], device=device)
+        if self.use_ddp:
+            loss_tensor = torch.tensor(
+                [total_train_loss, total_tokens], device=self.device
+            )
             dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
             avg_train_loss = (loss_tensor[0] / loss_tensor[1]).item()
 
         return avg_train_loss
 
-    def evaluate_one_epoch(
-        self,
-        model,
-        valid_loader,
-        device: torch.device,
-        epoch: int,
-        total_epochs: int,
-        metrics_tracker,
-        use_ddp: bool = False,
-        is_main: bool = True,
-    ) -> tuple[float, Dict[str, float]]:
-        model.eval()
-        criterion = self.get_loss_fn()
+    def evaluate_one_epoch(self, epoch, total_epochs) -> tuple[float, Dict[str, float]]:
+        self.model.eval()
         total_valid_loss = 0.0
         total_tokens = 0
-        metrics_tracker.reset()
+        self.metrics_tracker.reset()
 
-        self.on_epoch_start(model, training=False)
-        self._reset_loader(valid_loader)
+        self.on_epoch_start()
+        self._reset_loader(self.test_loader)
 
         valid_progress: Union[Any, tqdm]
-        if is_main:
+        if self.is_main:
             valid_progress = tqdm(
-                valid_loader,
+                self.test_loader,
                 desc=f"Epoch {epoch + 1}/{total_epochs} [Valid]",
                 leave=False,
             )
         else:
-            valid_progress = valid_loader
+            valid_progress = self.test_loader
 
         hidden: Optional[Union[Tensor, List[Tensor], Tuple[Tensor, ...]]] = None
         cell: Optional[Union[Tensor, List[Tensor], Tuple[Tensor, ...]]] = None
 
-        forward_params = inspect.signature(model.forward).parameters
+        forward_params = inspect.signature(self.model.forward).parameters
         accepts_hidden = "hidden" in forward_params
         accepts_cell = "cell" in forward_params
 
@@ -222,7 +176,7 @@ class LanguageModelingTask(BaseTask):
                 batch_size = inputs.size(0)
                 batch_tokens = targets.numel()
 
-                inputs, targets = inputs.to(device), targets.to(device)
+                inputs, targets = inputs.to(self.device), targets.to(self.device)
 
                 forward_kwargs = {}
                 if accepts_hidden and hidden is not None:
@@ -230,7 +184,7 @@ class LanguageModelingTask(BaseTask):
                 if accepts_cell and cell is not None:
                     forward_kwargs["cell"] = cell
 
-                outputs = model(inputs, **forward_kwargs)
+                outputs = self.model(inputs, **forward_kwargs)
 
                 if isinstance(outputs, tuple):
                     logits, state = outputs
@@ -249,7 +203,9 @@ class LanguageModelingTask(BaseTask):
                         "Model produced NaN or Inf logits during evaluation"
                     )
 
-                loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+                loss = self.criterion(
+                    logits.view(-1, logits.size(-1)), targets.view(-1)
+                )
                 loss_value = loss.item()
 
                 total_valid_loss += loss_value * batch_size
@@ -261,8 +217,8 @@ class LanguageModelingTask(BaseTask):
                 )  # (batch*seq, vocab)
                 all_targets.append(targets.view(-1).detach())  # (batch*seq,)
 
-                if is_main and hasattr(valid_progress, "set_postfix"):
-                    current_metrics = metrics_tracker.get_averages()
+                if self.is_main and hasattr(valid_progress, "set_postfix"):
+                    current_metrics = self.metrics_tracker.get_averages()
                     avg_loss = total_valid_loss / total_tokens
                     postfix = {
                         "Val Loss": f"{loss_value:.4f}",
@@ -272,15 +228,13 @@ class LanguageModelingTask(BaseTask):
                     postfix.update({k: f"{v:.4f}" for k, v in current_metrics.items()})
                     cast(tqdm, valid_progress).set_postfix(postfix)
 
-        self.on_epoch_end(model, training=False)
-
         all_logits = torch.cat(all_logits, dim=0)
         all_targets = torch.cat(all_targets, dim=0)
         avg_valid_loss = total_valid_loss / total_tokens if total_tokens > 0 else 0.0
 
-        if use_ddp:
+        if self.use_ddp:
             loss_tensor = torch.tensor(
-                [total_valid_loss, float(total_tokens)], device=device
+                [total_valid_loss, float(total_tokens)], device=self.device
             )
             dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
             avg_valid_loss = (loss_tensor[0] / loss_tensor[1]).item()
@@ -289,7 +243,7 @@ class LanguageModelingTask(BaseTask):
                 total_valid_loss / total_tokens if total_tokens > 0 else 0.0
             )
 
-        if use_ddp:
+        if self.use_ddp:
             world_size = dist.get_world_size()
 
             logits_list = [torch.empty_like(all_logits) for _ in range(world_size)]
@@ -308,9 +262,9 @@ class LanguageModelingTask(BaseTask):
         }
 
         avg_metrics = {"loss": avg_valid_loss}
-        for name in metrics_tracker.metric_names:
+        for name in self.metrics_tracker.metric_names:
             if hasattr(lm_metrics, name):
                 avg_metrics[name] = getattr(lm_metrics, name)(context)
 
-        metrics_tracker.update(avg_metrics)
+        self.metrics_tracker.update(avg_metrics)
         return avg_valid_loss, avg_metrics
