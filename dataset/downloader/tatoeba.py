@@ -12,8 +12,10 @@ import torch.distributed as dist
 
 from util.data import download_file
 from util.multi_gpu import is_rank0
+from engine.registry import register_downloader
 
 
+@register_downloader("tatoeba")
 class TatoebaDownloader:
     _thread_lock = threading.Lock()
 

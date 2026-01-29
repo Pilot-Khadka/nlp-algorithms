@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from engine.registry import register_model
-from common.positional_encoding import PositionalEncoding
+from net_common.positional_encoding import PositionalEncoding
 from trans_attention.attention import MultiHeadAttention, MultiHeadCrossAttention
 
 
@@ -111,7 +111,7 @@ class Decoder(nn.Module):
         return self.output_projection(x)
 
 
-# @register_model("seq2seq")
+@register_model("seq2seq")
 class Seq2Seq(nn.Module):
     def __init__(
         self,

@@ -5,7 +5,10 @@ from tqdm import tqdm
 
 from torch.utils.data import Dataset
 
+from engine.registry import register_reader
 
+
+@register_reader("tatoeba")
 class TatoebaDataset(Dataset):
     def __init__(
         self,

@@ -9,7 +9,7 @@ from infra.collator import BaseCollator
 from engine.registry import register_collator
 
 
-@register_collator("machine_translation")
+@register_collator("translation")
 class TranslationCollator(BaseCollator):
     def __init__(
         self,

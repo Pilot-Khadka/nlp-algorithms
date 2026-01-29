@@ -77,11 +77,11 @@ class DatasetBundleBuilder:
 
         tokenizer_cls = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
         tokenizer = tokenizer_cls()
-        token_vocab = build_token_vocab(train, tokenizer)
 
         label_vocab = None
         src_vocab = None
         tgt_vocab = None
+        token_vocab = None
 
         if config.task.name in {"classification", "ner"}:
             label_vocab = build_label_vocab(train, key="label")
@@ -90,6 +90,8 @@ class DatasetBundleBuilder:
             # for MT, text is in "src" and "tgt" columns
             src_vocab = build_token_vocab_from_key(train, tokenizer, key="src")
             tgt_vocab = build_token_vocab_from_key(train, tokenizer, key="tgt")
+        else:
+            token_vocab = build_token_vocab(train, tokenizer)
 
         return DatasetBundle(
             train_dataset=train,

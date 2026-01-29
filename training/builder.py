@@ -121,7 +121,7 @@ class TrainerBuilder:
         if self._is_language_modeling_task():
             return self._build_language_modeling_loaders(data_bundle)
 
-        return self._build_standard_dataloaders(data_bundle)
+        return self.build_standard_dataloaders(data_bundle)
 
     def _build_language_modeling_loaders(self, data_bundle):
         tokenizer = get_from_registry(TOKENIZER_REGISTRY, self.config.tokenizer.name)
@@ -155,7 +155,7 @@ class TrainerBuilder:
 
         return train_iterator, test_iterator
 
-    def _build_standard_dataloaders(self, data_bundle) -> tuple[DataLoader, DataLoader]:
+    def build_standard_dataloaders(self, data_bundle) -> tuple[DataLoader, DataLoader]:
         tokenizer = get_from_registry(TOKENIZER_REGISTRY, self.config.tokenizer.name)
 
         processed_train = PreprocessedDataset(
