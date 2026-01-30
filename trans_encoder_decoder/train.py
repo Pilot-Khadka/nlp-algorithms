@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 
 from trans_encoder_decoder import Seq2Seq
 from util.util import convert_to_attrdict, get_num_workers
-from engine.dataset_builder import build_token_vocab_from_key
+from engine.dataset_builder import build_vocab_from_key
 from infra.preprocessor import PreprocessedDataset
 from engine.registry import (
     DATA_READER_REGISTRY,
@@ -182,10 +182,8 @@ def get_dataloaders_distributed(config, world_size):
     test = data_reader_cls(data_dir=data_dir, split="test")
 
     tokenizer = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
-
-    src_vocab = build_token_vocab_from_key(train, tokenizer, key="src")
-
-    tgt_vocab = build_token_vocab_from_key(train, tokenizer, key="tgt")
+    src_vocab = build_vocab_from_key(dataset=train, tokenizer=tokenizer, key="src")
+    tgt_vocab = build_vocab_from_key(dataset=test, tokenizer=tokenizer, key="tgt")
 
     processed_train = PreprocessedDataset(
         train,

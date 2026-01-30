@@ -1,58 +1,46 @@
-from typing import Dict, List
-
 import os
-from tqdm import tqdm
 
-from torch.utils.data import Dataset
+import torch
 
 from engine.registry import register_reader
 
 
 @register_reader("tatoeba")
-class TatoebaDataset(Dataset):
-    def __init__(
-        self,
-        data_dir: str,
-        split: str,
-    ):
+class TatoebaDataset(torch.utils.data.Dataset):
+    def __init__(self, data_dir: str, split: str):
         self.split = split
         self.data_dir = data_dir
+        self.src_file = os.path.join(data_dir, f"{split}.src")
+        self.trg_file = os.path.join(data_dir, f"{split}.trg")
 
-        prepared_flag = os.path.join(data_dir, ".prepared")
-        if not os.path.exists(prepared_flag):
-            raise RuntimeError(
-                f"Data not prepared in {data_dir}. "
-                f"Call TatoebaDownloader.download_and_prepare(cfg) first."
-            )
+        self.src_offsets = []
+        self.trg_offsets = []
 
-        self.examples = self._load_raw_data()
+        with open(self.src_file, "r", encoding="utf-8") as f:
+            offset = 0
+            for line in f:
+                self.src_offsets.append(offset)
+                offset += len(line.encode("utf-8"))
 
-    def _load_raw_data(self) -> List[Dict[str, str]]:
-        src_file = os.path.join(self.data_dir, f"{self.split}.src")
-        trg_file = os.path.join(self.data_dir, f"{self.split}.trg")
+        with open(self.trg_file, "r", encoding="utf-8") as f:
+            offset = 0
+            for line in f:
+                self.trg_offsets.append(offset)
+                offset += len(line.encode("utf-8"))
 
-        if not os.path.exists(src_file) or not os.path.exists(trg_file):
-            raise FileNotFoundError(
-                f"Split '{self.split}' not found in {self.data_dir}. "
-                f"Expected {src_file} and {trg_file}"
-            )
+    def __len__(self):
+        return len(self.src_offsets)
 
-        examples = []
-        with open(src_file, "r", encoding="utf-8") as src_f:
-            with open(trg_file, "r", encoding="utf-8") as trg_f:
-                total = sum(1 for _ in open(src_file, "r", encoding="utf-8"))
-                for src_line, trg_line in tqdm(
-                    zip(src_f, trg_f), desc=f"Loading {self.split} data", total=total
-                ):
-                    examples.append({"src": src_line.strip(), "tgt": trg_line.strip()})
-
-        return examples
-
-    def __len__(self) -> int:
-        return len(self.examples)
-
-    def __getitem__(self, index: int) -> Dict[str, str]:
-        return self.examples[index]
+    def __getitem__(self, index):
+        with (
+            open(self.src_file, "r", encoding="utf-8") as src_f,
+            open(self.trg_file, "r", encoding="utf-8") as trg_f,
+        ):
+            src_f.seek(self.src_offsets[index])
+            trg_f.seek(self.trg_offsets[index])
+            src_line = src_f.readline().strip()
+            trg_line = trg_f.readline().strip()
+            return {"src": src_line, "tgt": trg_line}
 
 
 if __name__ == "__main__":
@@ -67,7 +55,7 @@ if __name__ == "__main__":
     }
 
     data_dir = TatoebaDownloader.download_and_prepare(cfg)
-    test_dataset = TatoebaDataset(data_dir, split="test")
+    test_dataset = TatoebaDataset(data_dir, split="train")
 
     example = test_dataset[0]
     print(example)

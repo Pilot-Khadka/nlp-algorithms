@@ -1,3 +1,7 @@
+from tqdm import tqdm
+from collections import Counter
+
+
 from engine.registry import (
     get_from_registry,
     DATA_READER_REGISTRY,
@@ -29,55 +33,48 @@ class DatasetBundle:
         self.tokenizer = tokenizer
 
 
-def build_token_vocab(train, tokenizer):
-    all_tokens = []
-    for item in train:
-        all_tokens.extend(tokenizer.tokenize(item["text"]))
+def build_vocab_from_key(
+    dataset,
+    key: str,
+    tokenizer=None,
+    vocab_size: int = 10000,
+    min_freq: int = 1,
+    special_tokens=None,
+):
+    if special_tokens is None:
+        special_tokens = {"<pad>": 0, "<unk>": 1}
 
-    vocab = Vocabulary.from_tokens(tokens=all_tokens)
-    return vocab
+    counter = Counter()
 
-
-def build_label_vocab(dataset, key="label"):
-    """For Classification or NER"""
-    all_labels = []
-    for item in dataset:
-        val = item[key]
-        if isinstance(val, list):  # NER case
-            all_labels.extend(val)
-        else:  # classification
-            all_labels.append(val)
-    return Vocabulary.from_tokens(all_labels)
-
-
-def build_token_vocab_from_key(train, tokenizer, key):
-    """
-    description: build a token vocabulary from a specific text field (e.g., 'src' or 'tgt').
-
-    inputs:
-        train: iterable of dataset items
-        tokenizer: tokenizer with a .tokenize(text) method
-        key: field name containing the text or list of texts
-
-    outputs:
-        vocab instance
-    """
-    all_tokens = []
-
-    for item in train:
+    for item in tqdm(dataset, desc=f"Building vocab from '{key}'"):
         val = item[key]
 
-        if isinstance(val, str):
-            all_tokens.extend(tokenizer.tokenize(val))
-
-        elif isinstance(val, list):
-            for text in val:
-                all_tokens.extend(tokenizer.tokenize(text))
-
+        if tokenizer is not None:
+            # text field
+            if isinstance(val, str):
+                counter.update(tokenizer.tokenize(val))
+            elif isinstance(val, list):
+                for text in val:
+                    counter.update(tokenizer.tokenize(text))
+            else:
+                raise ValueError(f"Unsupported type for key '{key}': {type(val)}")
         else:
-            raise ValueError(f"Unsupported type for key '{key}': {type(val)}")
+            # label field
+            if isinstance(val, list):
+                counter.update(val)
+            else:
+                counter.update([val])
 
-    return Vocabulary.from_tokens(tokens=all_tokens)
+    # build token_to_id
+    token_to_id = dict(special_tokens)
+    idx = len(token_to_id)
+
+    for token, freq in counter.most_common(vocab_size):
+        if freq >= min_freq and token not in token_to_id:
+            token_to_id[token] = idx
+            idx += 1
+
+    return Vocabulary(token_to_id)
 
 
 class DatasetBundleBuilder:
@@ -88,36 +85,41 @@ class DatasetBundleBuilder:
         data_dir = data_downloader_cls().download_and_prepare(config)
 
         data_reader_cls = get_from_registry(DATA_READER_REGISTRY, config.dataset.name)
-        train = data_reader_cls(
-            data_dir=data_dir,
-            split="train",
-        )
-        # val = data_reader_cls(
-        #     data_dir=data_dir,
-        #     split="val",
-        # )
-        test = data_reader_cls(
-            data_dir=data_dir,
-            split="test",
-        )
+        train = data_reader_cls(data_dir=data_dir, split="train")
+        test = data_reader_cls(data_dir=data_dir, split="test")
 
         tokenizer_cls = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
         tokenizer = tokenizer_cls()
 
         label_vocab = None
+        token_vocab = None
         src_vocab = None
         tgt_vocab = None
-        token_vocab = None
 
         if config.task.name in {"classification", "ner"}:
-            label_vocab = build_label_vocab(train, key="label")
-
+            label_vocab = build_vocab_from_key(
+                train, key="label", tokenizer=None, vocab_size=config.dataset.vocab_size
+            )
         elif config.task.name == "translation":
-            # for MT, text is in "src" and "tgt" columns
-            src_vocab = build_token_vocab_from_key(train, tokenizer, key="src")
-            tgt_vocab = build_token_vocab_from_key(train, tokenizer, key="tgt")
+            src_vocab = build_vocab_from_key(
+                train,
+                key="src",
+                tokenizer=tokenizer,
+                vocab_size=config.dataset.vocab_size,
+            )
+            tgt_vocab = build_vocab_from_key(
+                train,
+                key="tgt",
+                tokenizer=tokenizer,
+                vocab_size=config.dataset.vocab_size,
+            )
         else:
-            token_vocab = build_token_vocab(train, tokenizer)
+            token_vocab = build_vocab_from_key(
+                train,
+                key="text",
+                tokenizer=tokenizer,
+                vocab_size=config.dataset.vocab_size,
+            )
 
         return DatasetBundle(
             train_dataset=train,
