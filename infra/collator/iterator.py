@@ -113,4 +113,3 @@ class CorpusLanguageModelingDataset:
 
     def reset(self):
         self.pos = 0
-

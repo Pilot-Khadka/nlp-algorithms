@@ -5,8 +5,10 @@ from engine.registry import register_tokenizer
 
 @register_tokenizer("whitespace")
 class WhitespaceTokenizer:
-    def tokenize(self, text: str) -> List[str]:
+    @staticmethod
+    def tokenize(text: str) -> List[str]:
         return text.lower().split()
 
-    def detokenize(self, tokens: List[str]) -> str:
+    @staticmethod
+    def detokenize(tokens: List[str]) -> str:
         return " ".join(tokens)

@@ -51,7 +51,33 @@ def build_label_vocab(dataset, key="label"):
 
 
 def build_token_vocab_from_key(train, tokenizer, key):
-    pass
+    """
+    description: build a token vocabulary from a specific text field (e.g., 'src' or 'tgt').
+
+    inputs:
+        train: iterable of dataset items
+        tokenizer: tokenizer with a .tokenize(text) method
+        key: field name containing the text or list of texts
+
+    outputs:
+        vocab instance
+    """
+    all_tokens = []
+
+    for item in train:
+        val = item[key]
+
+        if isinstance(val, str):
+            all_tokens.extend(tokenizer.tokenize(val))
+
+        elif isinstance(val, list):
+            for text in val:
+                all_tokens.extend(tokenizer.tokenize(text))
+
+        else:
+            raise ValueError(f"Unsupported type for key '{key}': {type(val)}")
+
+    return Vocabulary.from_tokens(tokens=all_tokens)
 
 
 class DatasetBundleBuilder:

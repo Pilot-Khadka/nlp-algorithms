@@ -13,7 +13,15 @@ from torch.utils.data import DataLoader
 
 from trans_encoder_decoder import Seq2Seq
 from util.util import convert_to_attrdict, get_num_workers
-
+from engine.dataset_builder import build_token_vocab_from_key
+from infra.preprocessor import PreprocessedDataset
+from engine.registry import (
+    DATA_READER_REGISTRY,
+    DOWNLOADER_REGISTRY,
+    COLLATOR_REGISTRY,
+    TOKENIZER_REGISTRY,
+    get_from_registry,
+)
 from dataset.downloader import TatoebaDownloader
 
 
@@ -25,12 +33,14 @@ class DatasetBundle:
         test_loader,
         train_sampler,
         test_sampler,
-        vocab=None,
+        label_vocab,
+        src_vocab,
     ):
         self.train_loader = train_loader
         self.valid_loader = valid_loader
         self.test_loader = test_loader
-        self.vocab = vocab
+        self.label_vocab = label_vocab
+        self.src_vocab = src_vocab
         self.train_sampler = train_sampler
         self.test_sampler = test_sampler
 
@@ -63,12 +73,10 @@ def is_main_process(rank):
 
 def create_masks(src, tgt, pad_idx=0):
     src_mask = (src != pad_idx).unsqueeze(1).unsqueeze(2)
-
+    tgt_padding_mask = (tgt != pad_idx).unsqueeze(1).unsqueeze(2)
     tgt_len = tgt.size(1)
-    tgt_pad_mask = (tgt != pad_idx).unsqueeze(1).unsqueeze(2)
     tgt_causal_mask = torch.tril(torch.ones(tgt_len, tgt_len, device=tgt.device)).bool()
-    tgt_mask = tgt_pad_mask & tgt_causal_mask
-
+    tgt_mask = tgt_padding_mask & tgt_causal_mask
     return src_mask, tgt_mask
 
 
@@ -85,19 +93,26 @@ def train_epoch(
         progress_bar = dataloader
 
     for batch in progress_bar:
-        src = batch["source"].to(device)
-        tgt = batch["target"].to(device)
+        src_ids = batch["src_ids"].to(device)  # Already padded
+        tgt_ids = batch["tgt_ids"].to(device)  # Already shifted (input)
+        labels = batch["labels"].to(device)  # Already shifted (output)
 
-        tgt_input = tgt[:, :-1]
-        tgt_output = tgt[:, 1:]
-
-        src_mask, tgt_mask = create_masks(src, tgt_input, pad_idx)
+        src_mask, tgt_mask = create_masks(src_ids, tgt_ids, pad_idx)
 
         optimizer.zero_grad()
+        logits = model(src_ids, tgt_ids, src_mask, tgt_mask)
 
-        logits = model(src, tgt_input, src_mask, tgt_mask)
+        if (labels >= logits.size(-1)).any() or (labels < 0).any():
+            print(
+                "BAD LABEL:",
+                labels.min().item(),
+                labels.max().item(),
+                "num_classes:",
+                logits.size(-1),
+            )
+            raise ValueError("Label out of range")
 
-        loss = criterion(logits.reshape(-1, logits.size(-1)), tgt_output.reshape(-1))
+        loss = criterion(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -109,8 +124,8 @@ def train_epoch(
         if is_main_process(rank):
             progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
 
-    # Average loss across all processes
     avg_loss = total_loss / num_batches
+
     if world_size > 1:
         avg_loss_tensor = torch.tensor(avg_loss, device=device)
         dist.all_reduce(avg_loss_tensor, op=dist.ReduceOp.SUM)
@@ -131,24 +146,25 @@ def evaluate(model, dataloader, criterion, device, pad_idx=0, rank=0, world_size
             progress_bar = dataloader
 
         for batch in progress_bar:
-            src = batch["source"].to(device)
-            tgt = batch["target"].to(device)
+            # Get source and target from collator output
+            src_ids = batch["src_ids"].to(device)
+            tgt_ids = batch["tgt_ids"].to(device)
+            labels = batch["labels"].to(device)
 
-            tgt_input = tgt[:, :-1]
-            tgt_output = tgt[:, 1:]
+            # Create masks
+            src_mask, tgt_mask = create_masks(src_ids, tgt_ids, pad_idx)
 
-            src_mask, tgt_mask = create_masks(src, tgt_input, pad_idx)
+            # Forward pass
+            logits = model(src_ids, tgt_ids, src_mask, tgt_mask)
 
-            logits = model(src, tgt_input, src_mask, tgt_mask)
-
-            loss = criterion(
-                logits.reshape(-1, logits.size(-1)), tgt_output.reshape(-1)
-            )
+            # Compute loss
+            loss = criterion(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
 
             total_loss += loss.item()
             num_batches += 1
 
     avg_loss = total_loss / num_batches
+
     if world_size > 1:
         avg_loss_tensor = torch.tensor(avg_loss, device=device)
         dist.all_reduce(avg_loss_tensor, op=dist.ReduceOp.SUM)
@@ -157,83 +173,50 @@ def evaluate(model, dataloader, criterion, device, pad_idx=0, rank=0, world_size
     return avg_loss
 
 
-def collate_fn(batch, pad_idx=0):
-    sources = [item["source"] for item in batch]
-    targets = [item["target"] for item in batch]
+def get_dataloaders_distributed(config, world_size):
+    data_downloader_cls = get_from_registry(DOWNLOADER_REGISTRY, config.dataset.name)
+    data_dir = data_downloader_cls().download_and_prepare(config)
 
-    # Find max lengths in this batch
-    max_src_len = max(s.size(0) for s in sources)
-    max_tgt_len = max(t.size(0) for t in targets)
-
-    # Pad sequences
-    padded_sources = []
-    padded_targets = []
-
-    for src, tgt in zip(sources, targets):
-        # Pad source
-        src_pad = torch.full((max_src_len,), pad_idx, dtype=torch.long)
-        src_pad[: src.size(0)] = src
-        padded_sources.append(src_pad)
-
-        # Pad target
-        tgt_pad = torch.full((max_tgt_len,), pad_idx, dtype=torch.long)
-        tgt_pad[: tgt.size(0)] = tgt
-        padded_targets.append(tgt_pad)
-
-    return {
-        "source": torch.stack(padded_sources),
-        "target": torch.stack(padded_targets),
-    }
-
-
-def get_dataloaders_distributed(config):
-    from engine.dataset_builder import DatasetBundleBuilder
-
-    from infra.preprocessor import PreprocessedDataset
-    from engine.registry import (
-        COLLATOR_REGISTRY,
-        TOKENIZER_REGISTRY,
-        get_from_registry,
-    )
-
-    data_bundle = DatasetBundleBuilder().build(config=config)
+    data_reader_cls = get_from_registry(DATA_READER_REGISTRY, config.dataset.name)
+    train = data_reader_cls(data_dir=data_dir, split="train")
+    test = data_reader_cls(data_dir=data_dir, split="test")
 
     tokenizer = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
 
+    src_vocab = build_token_vocab_from_key(train, tokenizer, key="src")
+
+    tgt_vocab = build_token_vocab_from_key(train, tokenizer, key="tgt")
+
     processed_train = PreprocessedDataset(
-        data_bundle.train,
+        train,
         tokenizer,
-        data_bundle.vocab,
+        vocab=src_vocab,
+        target_vocab=tgt_vocab,
         max_len=config.dataset.sequence_length,
         task=config.task.name,
     )
-
     processed_test = PreprocessedDataset(
-        data_bundle.test,
+        test,
         tokenizer,
-        data_bundle.vocab,
+        vocab=src_vocab,
+        target_vocab=tgt_vocab,
         max_len=config.dataset.sequence_length,
         task=config.task.name,
     )
+    label_vocab = tgt_vocab
 
-    collator = get_from_registry(COLLATOR_REGISTRY, config.task.name)(
-        vocab=data_bundle.vocab,
-        architecture=config.model.name,
-    )
-
+    collator = get_from_registry(COLLATOR_REGISTRY, config.task.name)()
     num_workers = config.dataset.get("num_workers", "auto")
     num_workers = get_num_workers(num_workers=num_workers)
     pin_memory = config.dataset.get("pin_memory", True)
     prefetch_factor = config.dataset.get("prefetch_factor", 2)
 
-    train_sampler = DistributedSampler(
-        processed_train,
-        shuffle=True,
-    )
-    test_sampler = DistributedSampler(
-        processed_test,
-        shuffle=False,
-    )
+    if world_size > 1:
+        train_sampler = DistributedSampler(processed_train, shuffle=True)
+        test_sampler = DistributedSampler(processed_test, shuffle=False)
+    else:
+        train_sampler = None
+        test_sampler = None
 
     train_loader = DataLoader(
         processed_train,
@@ -244,7 +227,6 @@ def get_dataloaders_distributed(config):
         pin_memory=pin_memory,
         prefetch_factor=prefetch_factor,
     )
-
     test_loader = DataLoader(
         processed_test,
         batch_size=config.train.batch_size,
@@ -254,17 +236,20 @@ def get_dataloaders_distributed(config):
         pin_memory=pin_memory,
         prefetch_factor=prefetch_factor,
     )
+
     bundle = DatasetBundle(
         train_loader=train_loader,
         valid_loader=test_loader,
         test_loader=test_loader,
         train_sampler=train_sampler,
         test_sampler=test_sampler,
+        src_vocab=src_vocab,
+        label_vocab=label_vocab,
     )
-    return bundle, data_bundle
+    return bundle
 
 
-def train(cfg, rank, world_size, local_rank, skip_download=True):
+def train(cfg, rank, world_size, local_rank):
     device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
 
     if is_main_process(rank):
@@ -274,13 +259,13 @@ def train(cfg, rank, world_size, local_rank, skip_download=True):
     if is_main_process(rank):
         print("Loading dataset...")
 
-    dataset_bundle, original_bundle = get_dataloaders_distributed(cfg)
+    dataset_bundle = get_dataloaders_distributed(cfg, world_size=world_size)
     train_loader = dataset_bundle.train_loader
     val_loader = dataset_bundle.valid_loader
     test_loader = dataset_bundle.test_loader
 
-    source_vocab_size = len(dataset_bundle.train_loader.dataset.vocab)
-    target_vocab_size = len(dataset_bundle.train_loader.dataset.vocab)
+    source_vocab_size = len(dataset_bundle.src_vocab)
+    target_vocab_size = len(dataset_bundle.label_vocab)
 
     if is_main_process(rank):
         print(f"Source vocab size: {source_vocab_size}")
@@ -289,10 +274,10 @@ def train(cfg, rank, world_size, local_rank, skip_download=True):
     model = Seq2Seq(
         source_vocab_size=source_vocab_size,
         target_vocab_size=target_vocab_size,
-        d_model=cfg["model"]["d_model"],
-        num_layers=cfg["model"]["num_layers"],
-        num_heads=cfg["model"]["num_heads"],
-        d_ff=cfg["model"]["d_ff"],
+        d_model=cfg.model.d_model,
+        num_layers=cfg.model.num_layers,
+        num_heads=cfg.model.num_heads,
+        d_ff=cfg.model.d_ff,
     ).to(device)
 
     if world_size > 1:
@@ -456,7 +441,7 @@ def main():
         print("Configuration:")
         print(json.dumps(cfg, indent=2))
 
-    model, history = train(cfg, rank, world_size, local_rank, skip_download=True)
+    model, history = train(cfg, rank, world_size, local_rank)
 
     if is_main_process(rank):
         print("\nTraining completed!")
