@@ -1,6 +1,10 @@
 import os
 import json
+import math
 from tqdm import tqdm
+from collections import Counter
+from typing import List
+
 
 import torch
 import torch.nn as nn
@@ -80,11 +84,157 @@ def create_masks(src, tgt, pad_idx=0):
     return src_mask, tgt_mask
 
 
+def calculate_bleu(
+    references: List[List[str]], hypotheses: List[List[str]], max_n: int = 4
+) -> dict:
+    """
+    Compute BLEU score for machine translation evaluation.
+
+    Args:
+        references: List of reference translations (each as list of tokens)
+        hypotheses: List of hypothesis translations (each as list of tokens)
+        max_n: Maximum n-gram order (default: 4)
+
+    Returns:
+        Dictionary with BLEU scores
+    """
+    if len(references) != len(hypotheses):
+        raise ValueError("Number of references and hypotheses must match")
+
+    precisions = []
+
+    for n in range(1, max_n + 1):
+        ref_counts = Counter()
+        hyp_counts = Counter()
+
+        for ref, hyp in zip(references, hypotheses):
+            ref_ngrams = [tuple(ref[i : i + n]) for i in range(len(ref) - n + 1)]
+            hyp_ngrams = [tuple(hyp[i : i + n]) for i in range(len(hyp) - n + 1)]
+
+            for ngram in ref_ngrams:
+                ref_counts[ngram] += 1
+            for ngram in hyp_ngrams:
+                hyp_counts[ngram] += 1
+
+        clipped_counts = sum(
+            min(hyp_counts[ngram], ref_counts[ngram]) for ngram in hyp_counts
+        )
+        total_hyp_ngrams = sum(hyp_counts.values())
+
+        if total_hyp_ngrams > 0:
+            precision = clipped_counts / total_hyp_ngrams
+        else:
+            precision = 0.0
+
+        precisions.append(precision)
+
+    ref_length = sum(len(ref) for ref in references)
+    hyp_length = sum(len(hyp) for hyp in hypotheses)
+
+    if hyp_length > ref_length:
+        bp = 1.0
+    elif hyp_length == 0:
+        bp = 0.0
+    else:
+        bp = math.exp(1 - ref_length / hyp_length)
+
+    if min(precisions) > 0:
+        geo_mean = math.exp(sum(math.log(p) for p in precisions) / max_n)
+        bleu = bp * geo_mean
+    else:
+        bleu = 0.0
+
+    return {
+        "bleu": bleu * 100,
+        "bleu-1": precisions[0] * 100,
+        "bleu-2": precisions[1] * 100 if len(precisions) > 1 else 0.0,
+        "bleu-3": precisions[2] * 100 if len(precisions) > 2 else 0.0,
+        "bleu-4": precisions[3] * 100 if len(precisions) > 3 else 0.0,
+        "brevity_penalty": bp,
+        "ref_length": ref_length,
+        "hyp_length": hyp_length,
+    }
+
+
+def greedy_decode(
+    model, src, src_mask, max_len, tgt_vocab, device, pad_idx=0, sos_idx=1, eos_idx=2
+):
+    """
+    Greedy decoding for translation.
+
+    Args:
+        model: The sequence-to-sequence model
+        src: Source sequence [batch_size, src_len]
+        src_mask: Source mask
+        max_len: Maximum length for generation
+        tgt_vocab: Target vocabulary
+        device: Device to use
+        pad_idx: Padding token index
+        sos_idx: Start-of-sequence token index
+        eos_idx: End-of-sequence token index
+
+    Returns:
+        Generated sequences [batch_size, max_len]
+    """
+    batch_size = src.size(0)
+
+    generated = torch.full((batch_size, 1), sos_idx, dtype=torch.long, device=device)
+
+    for _ in range(max_len - 1):
+        tgt_mask = (
+            torch.tril(torch.ones(generated.size(1), generated.size(1), device=device))
+            .bool()
+            .unsqueeze(0)
+            .unsqueeze(0)
+        )
+
+        with torch.no_grad():
+            logits = model(src, generated, src_mask, tgt_mask)
+
+        next_token = logits[:, -1, :].argmax(dim=-1, keepdim=True)
+
+        generated = torch.cat([generated, next_token], dim=1)
+
+        if (next_token == eos_idx).all():
+            break
+
+    return generated
+
+
+def tokens_to_words(token_ids, vocab, pad_idx=0, sos_idx=1, eos_idx=2):
+    """
+    Convert token IDs to words.
+
+    Args:
+        token_ids: Tensor or list of token IDs
+        vocab: Vocabulary object
+        pad_idx: Padding token index
+        sos_idx: Start-of-sequence token index
+        eos_idx: End-of-sequence token index
+
+    Returns:
+        List of words
+    """
+    if isinstance(token_ids, torch.Tensor):
+        token_ids = token_ids.tolist()
+
+    words = []
+    for token_id in token_ids:
+        if token_id in [pad_idx, sos_idx, eos_idx]:
+            continue
+        word = vocab.lookup_token(token_id)
+        words.append(word)
+
+    return words
+
+
 def train_epoch(
     model, dataloader, optimizer, criterion, device, pad_idx=0, rank=0, world_size=1
 ):
+    """Train for one epoch and return average loss."""
     model.train()
-    total_loss = 0
+    total_loss = 0.0
+    total_tokens = 0
     num_batches = 0
 
     if is_main_process(rank):
@@ -93,9 +243,9 @@ def train_epoch(
         progress_bar = dataloader
 
     for batch in progress_bar:
-        src_ids = batch["src_ids"].to(device)  # Already padded
-        tgt_ids = batch["tgt_ids"].to(device)  # Already shifted (input)
-        labels = batch["labels"].to(device)  # Already shifted (output)
+        src_ids = batch["src_ids"].to(device)
+        tgt_ids = batch["tgt_ids"].to(device)
+        labels = batch["labels"].to(device)
 
         src_mask, tgt_mask = create_masks(src_ids, tgt_ids, pad_idx)
 
@@ -114,30 +264,68 @@ def train_epoch(
 
         loss = criterion(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
 
+        non_pad_tokens = (labels != pad_idx).sum().item()
+        batch_loss = loss.item() * logits.size(0) * logits.size(1)
+
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
-        total_loss += loss.item()
+        total_loss += batch_loss
+        total_tokens += non_pad_tokens
         num_batches += 1
 
         if is_main_process(rank):
             progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
 
-    avg_loss = total_loss / num_batches
+    avg_loss = total_loss / total_tokens if total_tokens > 0 else 0.0
 
     if world_size > 1:
-        avg_loss_tensor = torch.tensor(avg_loss, device=device)
-        dist.all_reduce(avg_loss_tensor, op=dist.ReduceOp.SUM)
-        avg_loss = avg_loss_tensor.item() / world_size
+        total_loss_tensor = torch.tensor(total_loss, device=device)
+        total_tokens_tensor = torch.tensor(total_tokens, device=device)
+
+        dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
+        dist.all_reduce(total_tokens_tensor, op=dist.ReduceOp.SUM)
+
+        avg_loss = total_loss_tensor.item() / total_tokens_tensor.item()
 
     return avg_loss
 
 
-def evaluate(model, dataloader, criterion, device, pad_idx=0, rank=0, world_size=1):
+def evaluate(
+    model,
+    dataloader,
+    criterion,
+    device,
+    tgt_vocab,
+    compute_metrics=True,
+    max_decode_len=80,
+    pad_idx=0,
+    rank=0,
+    world_size=1,
+):
+    """
+    inputs:
+        model: The model to evaluate
+        dataloader: DataLoader for evaluation
+        criterion: Loss criterion
+        device: Device to use
+        tgt_vocab: Target vocabulary for decoding
+        compute_metrics: Whether to compute BLEU scores
+        max_decode_len: Maximum length for decoding
+        pad_idx: Padding token index
+        rank: Process rank
+        world_size: Number of processes
+
+    outputs:
+        Dictionary with loss and metrics
+    """
     model.eval()
-    total_loss = 0
-    num_batches = 0
+    total_loss = 0.0
+    total_tokens = 0
+
+    all_references = []
+    all_hypotheses = []
 
     with torch.no_grad():
         if is_main_process(rank):
@@ -146,31 +334,64 @@ def evaluate(model, dataloader, criterion, device, pad_idx=0, rank=0, world_size
             progress_bar = dataloader
 
         for batch in progress_bar:
-            # Get source and target from collator output
             src_ids = batch["src_ids"].to(device)
             tgt_ids = batch["tgt_ids"].to(device)
             labels = batch["labels"].to(device)
 
-            # Create masks
             src_mask, tgt_mask = create_masks(src_ids, tgt_ids, pad_idx)
 
-            # Forward pass
             logits = model(src_ids, tgt_ids, src_mask, tgt_mask)
-
-            # Compute loss
             loss = criterion(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
 
-            total_loss += loss.item()
-            num_batches += 1
+            non_pad_tokens = (labels != pad_idx).sum().item()
+            batch_loss = loss.item() * logits.size(0) * logits.size(1)
 
-    avg_loss = total_loss / num_batches
+            total_loss += batch_loss
+            total_tokens += non_pad_tokens
+
+            if compute_metrics:
+                generated = greedy_decode(
+                    model,
+                    src_ids,
+                    src_mask,
+                    max_decode_len,
+                    tgt_vocab,
+                    device,
+                    pad_idx=pad_idx,
+                )
+
+                for i in range(src_ids.size(0)):
+                    ref_tokens = tokens_to_words(labels[i], tgt_vocab, pad_idx=pad_idx)
+                    hyp_tokens = tokens_to_words(
+                        generated[i], tgt_vocab, pad_idx=pad_idx
+                    )
+
+                    all_references.append(ref_tokens)
+                    all_hypotheses.append(hyp_tokens)
+
+    avg_loss = total_loss / total_tokens if total_tokens > 0 else 0.0
 
     if world_size > 1:
-        avg_loss_tensor = torch.tensor(avg_loss, device=device)
-        dist.all_reduce(avg_loss_tensor, op=dist.ReduceOp.SUM)
-        avg_loss = avg_loss_tensor.item() / world_size
+        total_loss_tensor = torch.tensor(total_loss, device=device)
+        total_tokens_tensor = torch.tensor(total_tokens, device=device)
 
-    return avg_loss
+        dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
+        dist.all_reduce(total_tokens_tensor, op=dist.ReduceOp.SUM)
+
+        avg_loss = total_loss_tensor.item() / total_tokens_tensor.item()
+
+    results = {"loss": avg_loss}
+
+    if compute_metrics and len(all_references) > 0:
+        if world_size > 1:
+            if is_main_process(rank):
+                bleu_scores = calculate_bleu(all_references, all_hypotheses)
+                results.update(bleu_scores)
+        else:
+            bleu_scores = calculate_bleu(all_references, all_hypotheses)
+            results.update(bleu_scores)
+
+    return results
 
 
 def get_dataloaders_distributed(config, world_size):
@@ -201,7 +422,7 @@ def get_dataloaders_distributed(config, world_size):
         config=config,
         tokenizer=tokenizer,
         key="tgt",
-    )  # note train for target also
+    )
 
     processed_train = PreprocessedDataset(
         train,
@@ -303,7 +524,7 @@ def train(cfg, rank, world_size, local_rank):
         num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"Model parameters: {num_params:,}")
 
-    criterion = nn.CrossEntropyLoss(ignore_index=0)
+    criterion = nn.CrossEntropyLoss(ignore_index=0, reduction="mean")
     optimizer = Adam(
         model.parameters(),
         lr=cfg["train"]["learning_rate"],
@@ -316,11 +537,14 @@ def train(cfg, rank, world_size, local_rank):
         os.makedirs(cfg["train"]["checkpoint_dir"], exist_ok=True)
 
     best_val_loss = float("inf")
+    best_bleu = 0.0
     train_history = []
 
     for epoch in range(1, cfg["train"]["num_epochs"] + 1):
         if is_main_process(rank):
-            print(f"\nEpoch {epoch}/{cfg['train']['num_epochs']}")
+            print(f"\n{'=' * 60}")
+            print(f"Epoch {epoch}/{cfg['train']['num_epochs']}")
+            print(f"{'=' * 60}")
 
         if world_size > 1:
             dataset_bundle.train_sampler.set_epoch(epoch)
@@ -334,28 +558,65 @@ def train(cfg, rank, world_size, local_rank):
             rank=rank,
             world_size=world_size,
         )
-        val_loss = evaluate(
-            model, val_loader, criterion, device, rank=rank, world_size=world_size
+
+        val_results = evaluate(
+            model,
+            val_loader,
+            criterion,
+            device,
+            dataset_bundle.label_vocab,
+            compute_metrics=True,
+            max_decode_len=cfg.dataset.sequence_length,
+            rank=rank,
+            world_size=world_size,
         )
 
-        scheduler.step(val_loss)
+        scheduler.step(val_results["loss"])
 
         if is_main_process(rank):
-            print(f"Train Loss: {train_loss:.4f}")
-            print(f"Val Loss: {val_loss:.4f}")
+            print(f"\nTrain Loss: {train_loss:.4f}")
+            print(f"Val Loss: {val_results['loss']:.4f}")
 
-            train_history.append(
-                {
-                    "epoch": epoch,
-                    "train_loss": train_loss,
-                    "val_loss": val_loss,
-                    "lr": optimizer.param_groups[0]["lr"],
-                }
-            )
+            if "bleu" in val_results:
+                print(f"Val BLEU: {val_results['bleu']:.2f}")
+                print(f"  BLEU-1: {val_results['bleu-1']:.2f}")
+                print(f"  BLEU-2: {val_results['bleu-2']:.2f}")
+                print(f"  BLEU-3: {val_results['bleu-3']:.2f}")
+                print(f"  BLEU-4: {val_results['bleu-4']:.2f}")
+                print(f"  Brevity Penalty: {val_results['brevity_penalty']:.4f}")
 
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+            history_entry = {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "val_loss": val_results["loss"],
+                "lr": optimizer.param_groups[0]["lr"],
+            }
 
+            if "bleu" in val_results:
+                history_entry.update(
+                    {
+                        "val_bleu": val_results["bleu"],
+                        "val_bleu_1": val_results["bleu-1"],
+                        "val_bleu_2": val_results["bleu-2"],
+                        "val_bleu_3": val_results["bleu-3"],
+                        "val_bleu_4": val_results["bleu-4"],
+                    }
+                )
+
+            train_history.append(history_entry)
+
+            save_best = False
+            save_reason = None
+            if "bleu" in val_results and val_results["bleu"] > best_bleu:
+                best_bleu = val_results["bleu"]
+                save_best = True
+                save_reason = f"BLEU: {best_bleu:.2f}"
+            elif val_results["loss"] < best_val_loss:
+                best_val_loss = val_results["loss"]
+                save_best = True
+                save_reason = f"Loss: {best_val_loss:.4f}"
+
+            if save_best:
                 model_state_dict = (
                     model.module.state_dict()
                     if isinstance(model, DDP)
@@ -368,14 +629,14 @@ def train(cfg, rank, world_size, local_rank):
                     "optimizer_state_dict": optimizer.state_dict(),
                     "scheduler_state_dict": scheduler.state_dict(),
                     "train_loss": train_loss,
-                    "val_loss": val_loss,
+                    "val_results": val_results,
                     "config": cfg,
                 }
                 checkpoint_path = os.path.join(
                     cfg["train"]["checkpoint_dir"], "best_model.pt"
                 )
                 torch.save(checkpoint, checkpoint_path)
-                print(f"Saved best model (val_loss: {val_loss:.4f})")
+                print(f"Saved best model ({save_reason})")
 
             if epoch % cfg["train"]["save_every"] == 0:
                 model_state_dict = (
@@ -394,10 +655,11 @@ def train(cfg, rank, world_size, local_rank):
                         "optimizer_state_dict": optimizer.state_dict(),
                         "scheduler_state_dict": scheduler.state_dict(),
                         "train_loss": train_loss,
-                        "val_loss": val_loss,
+                        "val_results": val_results,
                     },
                     checkpoint_path,
                 )
+                print(f"✓ Saved checkpoint at epoch {epoch}")
 
         if world_size > 1:
             dist.barrier()
@@ -409,16 +671,45 @@ def train(cfg, rank, world_size, local_rank):
         with open(history_path, "w") as f:
             json.dump(train_history, f, indent=2)
 
-        print("\nEvaluating on test set...")
+        print(f"\n{'=' * 60}")
+        print("Evaluating on test set...")
+        print(f"{'=' * 60}")
 
-    test_loss = evaluate(
-        model, test_loader, criterion, device, rank=rank, world_size=world_size
+    test_results = evaluate(
+        model,
+        test_loader,
+        criterion,
+        device,
+        dataset_bundle.label_vocab,
+        compute_metrics=True,
+        max_decode_len=cfg.dataset.sequence_length,
+        rank=rank,
+        world_size=world_size,
     )
 
     if is_main_process(rank):
-        print(f"Test Loss: {test_loss:.4f}")
+        print(f"\n{'=' * 60}")
+        print("Test Results:")
+        print(f"{'=' * 60}")
+        print(f"Test Loss: {test_results['loss']:.4f}")
 
-    return model, train_history
+        if "bleu" in test_results:
+            print(f"Test BLEU: {test_results['bleu']:.2f}")
+            print(f"  BLEU-1: {test_results['bleu-1']:.2f}")
+            print(f"  BLEU-2: {test_results['bleu-2']:.2f}")
+            print(f"  BLEU-3: {test_results['bleu-3']:.2f}")
+            print(f"  BLEU-4: {test_results['bleu-4']:.2f}")
+            print(f"  Brevity Penalty: {test_results['brevity_penalty']:.4f}")
+            print(f"  Reference Length: {test_results['ref_length']}")
+            print(f"  Hypothesis Length: {test_results['hyp_length']}")
+
+        test_results_path = os.path.join(
+            cfg["train"]["checkpoint_dir"], "test_results.json"
+        )
+        with open(test_results_path, "w") as f:
+            json.dump(test_results, f, indent=2)
+
+    return model, train_history, test_results
 
 
 def main():
@@ -444,10 +735,11 @@ def main():
             "checkpoint_dir": "checkpoints",
             "save_every": 5,
         },
-        "tokenizer": {"name": "whitespace"},
+        "tokenizer": {"name": "bpe"},
         "task": {"name": "translation"},
     }
     cfg = convert_to_attrdict(cfg)
+
     print("\n=== Downloading Dataset ===")
     TatoebaDownloader.download_and_prepare(cfg)
     print("Dataset ready!\n")
@@ -458,10 +750,15 @@ def main():
         print("Configuration:")
         print(json.dumps(cfg, indent=2))
 
-    model, history = train(cfg, rank, world_size, local_rank)
+    model, history, test_results = train(cfg, rank, world_size, local_rank)
 
     if is_main_process(rank):
-        print("\nTraining completed!")
+        print("\n" + "=" * 60)
+        print("Training completed!")
+        print("=" * 60)
+
+        if "bleu" in test_results:
+            print(f"Final Test BLEU: {test_results['bleu']:.2f}")
 
     cleanup_distributed()
 
