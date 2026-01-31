@@ -1,15 +1,17 @@
-import os
-import json
-import math
-from tqdm import tqdm
-from collections import Counter
 from typing import List
 
 
+import os
+import json
+import math
+import inspect
+from tqdm import tqdm
+from collections import Counter
+
 import torch
 import torch.nn as nn
-from torch.optim import Adam
 import torch.distributed as dist
+from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -201,7 +203,7 @@ def greedy_decode(
     return generated
 
 
-def tokens_to_words(token_ids, vocab, pad_idx=0, sos_idx=1, eos_idx=2):
+def tokens_to_words(token_ids, vocab, pad_idx=0, eos_idx=1):
     """
     Convert token IDs to words.
 
@@ -209,7 +211,6 @@ def tokens_to_words(token_ids, vocab, pad_idx=0, sos_idx=1, eos_idx=2):
         token_ids: Tensor or list of token IDs
         vocab: Vocabulary object
         pad_idx: Padding token index
-        sos_idx: Start-of-sequence token index
         eos_idx: End-of-sequence token index
 
     Returns:
@@ -220,9 +221,9 @@ def tokens_to_words(token_ids, vocab, pad_idx=0, sos_idx=1, eos_idx=2):
 
     words = []
     for token_id in token_ids:
-        if token_id in [pad_idx, sos_idx, eos_idx]:
+        if token_id in [pad_idx, eos_idx]:
             continue
-        word = vocab.lookup_token(token_id)
+        word = vocab.decode([token_id])[0]
         words.append(word)
 
     return words
@@ -410,7 +411,19 @@ def get_dataloaders_distributed(config, world_size):
         max_samples=config.dataset.max_samples,
     )
 
-    tokenizer = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
+    tokenizer_cls = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
+
+    tokenizer_kwargs = {}
+    sig = inspect.signature(tokenizer_cls.__init__)
+
+    if "vocab_size" in sig.parameters:
+        bpe_vocab_size = getattr(
+            config.tokenizer, "vocab_size", config.dataset.vocab_size
+        )
+        tokenizer_kwargs["vocab_size"] = bpe_vocab_size
+
+    tokenizer = tokenizer_cls(**tokenizer_kwargs)
+
     src_vocab = build_vocab_from_key(
         dataset=train,
         config=config,
@@ -659,7 +672,7 @@ def train(cfg, rank, world_size, local_rank):
                     },
                     checkpoint_path,
                 )
-                print(f"✓ Saved checkpoint at epoch {epoch}")
+                print(f" Saved checkpoint at epoch {epoch}")
 
         if world_size > 1:
             dist.barrier()
@@ -732,7 +745,7 @@ def main():
             "batch_size": 128,
             "num_epochs": 20,
             "learning_rate": 1e-4,
-            "checkpoint_dir": "checkpoints",
+            "checkpoint_dir": "checkpoint",
             "save_every": 5,
         },
         "tokenizer": {"name": "bpe"},

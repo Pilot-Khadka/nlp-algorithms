@@ -98,7 +98,7 @@ def build_vocab_from_key(
         elif not _is_trained(tokenizer):
             print(f"Training tokenizer on '{key}' corpus...")
             corpus = _collect_corpus(dataset, key)
-            tokenizer.train(corpus)
+            tokenizer.train(corpus=corpus)
             del corpus
             gc.collect()
 

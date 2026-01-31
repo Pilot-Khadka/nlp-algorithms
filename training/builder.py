@@ -141,7 +141,7 @@ class TrainerBuilder:
 
         tokenizer = tokenizer_cls(**tokenizer_kwargs)
         if _is_trainable_tokenizer(tokenizer):
-            checkpoint_dir = getattr(self.config, "checkpoint_dir", "./checkpoints")
+            checkpoint_dir = getattr(self.config, "checkpoint_dir", "./checkpoint")
             os.makedirs(checkpoint_dir, exist_ok=True)
             pickle_path = resolve_tokenizer_path(self.config)
 
@@ -204,7 +204,7 @@ class TrainerBuilder:
         tokenizer = tokenizer_cls(**tokenizer_kwargs)
 
         if _is_trainable_tokenizer(tokenizer):
-            checkpoint_dir = getattr(self.config, "checkpoint_dir", "./checkpoints")
+            checkpoint_dir = getattr(self.config, "checkpoint_dir", "./checkpoint")
             os.makedirs(checkpoint_dir, exist_ok=True)
             pickle_path = os.path.join(checkpoint_dir, "lm_tokenizer.pkl")
 

@@ -49,7 +49,6 @@ class PreprocessedDataset(torch.utils.data.Dataset):
         self.max_len = max_len
 
         self.examples = []
-        tokenizer = tokenizer()
         for item in tqdm(base_dataset, desc=f"Building {task} dataset"):
             task_spec = self.builder.build(item)
             example = {}
