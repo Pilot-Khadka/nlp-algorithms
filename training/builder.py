@@ -1,8 +1,11 @@
-from typing import Any, Union
+from typing import Any, Union, Optional
+
+import os
+import pickle
+import inspect
+from dataclasses import dataclass
 
 import torch
-from dataclasses import dataclass
-from typing import Optional
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -18,8 +21,8 @@ from engine.registry import (
 )
 from engine.model_factory import ModelFactory
 from engine.optimizer import get_optimizer
-from engine.dataset_builder import DatasetBundleBuilder
-from util.util import get_num_workers
+from engine.dataset_builder import DatasetBundleBuilder, _is_trainable_tokenizer
+from util.util import get_num_workers, resolve_tokenizer_path
 
 ModelLike = Union[torch.nn.Module, DataParallel, DistributedDataParallel]
 SchedulerLike = Optional[Union[_LRScheduler, ReduceLROnPlateau]]
@@ -124,7 +127,37 @@ class TrainerBuilder:
         return self.build_standard_dataloaders(data_bundle)
 
     def _build_language_modeling_loaders(self, data_bundle):
-        tokenizer = get_from_registry(TOKENIZER_REGISTRY, self.config.tokenizer.name)
+        tokenizer_cls = get_from_registry(
+            TOKENIZER_REGISTRY, self.config.tokenizer.name
+        )
+
+        tokenizer_kwargs = {}
+        sig = inspect.signature(tokenizer_cls.__init__)
+        if "vocab_size" in sig.parameters:
+            bpe_vocab_size = getattr(
+                self.config.tokenizer, "vocab_size", self.config.dataset.vocab_size
+            )
+            tokenizer_kwargs["vocab_size"] = bpe_vocab_size
+
+        tokenizer = tokenizer_cls(**tokenizer_kwargs)
+        if _is_trainable_tokenizer(tokenizer):
+            checkpoint_dir = getattr(self.config, "checkpoint_dir", "./checkpoints")
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            pickle_path = resolve_tokenizer_path(self.config)
+
+            if os.path.exists(pickle_path):
+                print(f"[LM] Loading tokenizer from: {pickle_path}")
+                with open(pickle_path, "rb") as f:
+                    state = pickle.load(f)
+                tokenizer.vocab = state["vocab"]
+                tokenizer.merges = state["merges"]
+
+            else:
+                raise RuntimeError(
+                    f"[LM] Trainable tokenizer requires a saved .pkl file, "
+                    f"but none found at: {pickle_path}\n"
+                    f"Tokenizer must be trained earlier in DatasetBundleBuilder."
+                )
         collator_class = get_from_registry(COLLATOR_REGISTRY, self.config.task.name)
 
         train_iterator = collator_class(
@@ -156,7 +189,38 @@ class TrainerBuilder:
         return train_iterator, test_iterator
 
     def build_standard_dataloaders(self, data_bundle) -> tuple[DataLoader, DataLoader]:
-        tokenizer = get_from_registry(TOKENIZER_REGISTRY, self.config.tokenizer.name)
+        tokenizer_cls = get_from_registry(
+            TOKENIZER_REGISTRY, self.config.tokenizer.name
+        )
+
+        tokenizer_kwargs = {}
+        sig = inspect.signature(tokenizer_cls.__init__)
+        if "vocab_size" in sig.parameters:
+            bpe_vocab_size = getattr(
+                self.config.tokenizer, "vocab_size", self.config.dataset.vocab_size
+            )
+            tokenizer_kwargs["vocab_size"] = bpe_vocab_size
+
+        tokenizer = tokenizer_cls(**tokenizer_kwargs)
+
+        if _is_trainable_tokenizer(tokenizer):
+            checkpoint_dir = getattr(self.config, "checkpoint_dir", "./checkpoints")
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            pickle_path = os.path.join(checkpoint_dir, "lm_tokenizer.pkl")
+
+            if os.path.exists(pickle_path):
+                print(f"[LM] Loading tokenizer from: {pickle_path}")
+                with open(pickle_path, "rb") as f:
+                    state = pickle.load(f)
+                    tokenizer.vocab = state["vocab"]
+                    tokenizer.merges = state["merges"]
+
+            else:
+                raise RuntimeError(
+                    f"[LM] Trainable tokenizer requires a saved .pkl file, "
+                    f"but none found at: {pickle_path}\n"
+                    f"Tokenizer must be trained earlier in DatasetBundleBuilder."
+                )
 
         processed_train = PreprocessedDataset(
             data_bundle.train,

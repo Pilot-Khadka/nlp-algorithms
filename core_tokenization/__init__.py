@@ -1,2 +1,2 @@
-from .bpe import BPE
+from .bpe import BPETokenizer
 from .whitespace import WhitespaceTokenizer

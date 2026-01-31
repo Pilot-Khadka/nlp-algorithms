@@ -1,5 +1,6 @@
 from typing import Union, Optional, Dict, Any
 
+import os
 import yaml
 from pathlib import Path
 
@@ -159,3 +160,18 @@ def load_checkpoint(
     best_valid_loss = checkpoint.get("best_valid_loss", float("inf"))
 
     return start_epoch, best_valid_loss
+
+
+def resolve_tokenizer_path(config):
+    checkpoint_dir = getattr(config, "checkpoint_dir", "./checkpoint")
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
+    task_name = config.task.name
+    dataset_name = config.dataset.name
+    tokenizer_name = config.tokenizer.name
+
+    pickle_path = os.path.join(
+        checkpoint_dir, f"{dataset_name}_{task_name}_{tokenizer_name}.pkl"
+    )
+
+    return pickle_path

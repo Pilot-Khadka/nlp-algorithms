@@ -13,7 +13,8 @@ dataset:
   prefetch_factor: 2
 
 tokenizer:
-  name: whitespace
+  # name: whitespace
+  name: bpe
 
 
 model:

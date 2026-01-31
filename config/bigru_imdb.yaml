@@ -8,7 +8,8 @@ dataset:
 
 
 tokenizer:
-  name: whitespace
+  # name: whitespace
+  name: bpe
 
 dataloader:
   use_cache: true

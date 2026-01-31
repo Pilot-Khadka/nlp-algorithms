@@ -1,159 +1,154 @@
-from typing import List, Dict
+from typing import List, Tuple, Dict
+from collections import defaultdict
+
+import json
+import heapq
 from tqdm import tqdm
+from collections import Counter
+
+from engine.registry import register_tokenizer
 
 
-from core_tokenization.base import BaseTokenizer
-
-
-class BPE(BaseTokenizer):
-    def __init__(self, vocab_size: int = 10000):
+@register_tokenizer("bpe")
+class BPETokenizer:
+    def __init__(self, vocab_size: int = 1000, end_of_word: str = "</w>"):
         self.vocab_size = vocab_size
-        self.merges = {}
-        self.vocab = {}
-        self.str_to_token = {}
+        self.end_of_word = end_of_word
+        self.vocab: Dict[str, int] = {}
+        self.merges: List[Tuple[str, str]] = []
+        self.merge_ranks: Dict[Tuple[str, str], int] = {}
 
-    def tokenize(self, text: str) -> List[str]:
-        tokens = list(text.encode("utf-8"))
+    def train(self, corpus: str):
+        words = corpus.split()
+        word_freqs = Counter()
 
-        while True:
-            pair_counts = get_common_pair(tokens)
-            possible_merges = []
-            for pair in pair_counts:
-                if pair in self.merges:
-                    possible_merges.append((pair, self.merges[pair]))
+        for word in tqdm(words, desc="Collecting frequencies"):
+            chars = list(word) + [self.end_of_word]
+            word_freqs[tuple(chars)] += 1
 
-            if not possible_merges:
-                break
+        vocab = set()
+        for w in word_freqs:
+            vocab.update(w)
+        self.vocab = {ch: i for i, ch in enumerate(sorted(vocab))}
 
-            pair_to_merge = min(possible_merges, key=lambda x: x[1])[0]
-            merge_idx = self.merges[pair_to_merge]
-            tokens = merge(tokens, pair_to_merge, merge_idx)
+        pair_stats = defaultdict(int)
+        for word, freq in word_freqs.items():
+            for i in range(len(word) - 1):
+                pair_stats[(word[i], word[i + 1])] += freq
 
-        return [self.vocab[token].decode("utf-8", errors="replace") for token in tokens]
+        heap = [(-freq, pair) for pair, freq in pair_stats.items()]
+        heapq.heapify(heap)
 
-    def build_vocab(self, texts: List[str], vocab_size: int = 10000, min_freq: int = 1):
-        self.vocab_size = vocab_size
-        self.merges = {}
-        self.vocab = {i: bytes([i]) for i in range(256)}
+        pbar = tqdm(total=self.vocab_size - len(self.vocab), desc="Training BPE")
 
-        if isinstance(texts, str):
-            texts = [texts]
+        while len(self.vocab) < self.vocab_size and heap:
+            neg_freq, best_pair = heapq.heappop(heap)
+            freq = -neg_freq
 
-        all_tokens = []
-        for text in texts:
-            all_tokens.extend(list(text.encode("utf-8")))
+            if pair_stats.get(best_pair, 0) != freq:
+                continue
 
-        current_vocab_size = 256
-        num_merges = self.vocab_size - 256
+            self.merges.append(best_pair)
+            merged_token = "".join(best_pair)
+            self.vocab[merged_token] = len(self.vocab)
 
-        pbar = tqdm(total=num_merges, desc="Building BPE vocabulary")
+            self.merge_ranks[best_pair] = len(self.merge_ranks)
 
-        while current_vocab_size < self.vocab_size:
-            pair_counts = get_common_pair(all_tokens)
+            new_word_freqs = {}
+            pair_stats = defaultdict(int)
 
-            if not pair_counts:
-                break
+            for word, count in word_freqs.items():
+                new_word = self._merge_word(word, best_pair)
+                new_word_freqs[new_word] = count
 
-            filtered_pairs = {
-                pair: count for pair, count in pair_counts.items() if count >= min_freq
-            }
+                for i in range(len(new_word) - 1):
+                    pair_stats[(new_word[i], new_word[i + 1])] += count
 
-            if not filtered_pairs:
-                break
+            word_freqs = new_word_freqs
 
-            most_common_pair = max(filtered_pairs.items(), key=lambda item: item[1])[0]
-            new_token_idx = current_vocab_size
+            heap = [(-f, p) for p, f in pair_stats.items()]
+            heapq.heapify(heap)
 
-            self.merges[most_common_pair] = new_token_idx
-            self.vocab[new_token_idx] = (
-                self.vocab[most_common_pair[0]] + self.vocab[most_common_pair[1]]
-            )
-
-            all_tokens = merge(all_tokens, most_common_pair, new_token_idx)
-            current_vocab_size += 1
             pbar.update(1)
 
         pbar.close()
-        self._build_str_to_token_map()
 
-    def _build_str_to_token_map(self):
-        self.str_to_token = {}
-        for token_idx, byte_seq in self.vocab.items():
-            token_str = byte_seq.decode("utf-8", errors="replace")
-            self.str_to_token[token_str] = token_idx
+        if not self.merge_ranks:
+            self.merge_ranks = {pair: i for i, pair in enumerate(self.merges)}
 
-    def encode(self, text: str, max_len: int = 128) -> List[int]:
-        tokens = list(text.encode("utf-8"))
+    def tokenize(self, text: str) -> List[str]:
+        if not self.merges:
+            raise RuntimeError("Tokenizer must be trained first")
+
+        tokens = []
+
+        for word in text.split():
+            word_tuple = list(word) + [self.end_of_word]
+            word_tuple = self._apply_merges_greedy(word_tuple)
+
+            tokens.extend(word_tuple)
+
+        return tokens
+
+    def _apply_merges_greedy(self, word: List[str]) -> List[str]:
+        word = list(word)
 
         while True:
-            pair_counts = get_common_pair(tokens)
-            possible_merges = []
-            for pair in pair_counts:
-                if pair in self.merges:
-                    possible_merges.append((pair, self.merges[pair]))
+            candidates = []
+            for i in range(len(word) - 1):
+                pair = (word[i], word[i + 1])
+                if pair in self.merge_ranks:
+                    candidates.append((self.merge_ranks[pair], i, pair))
 
-            if not possible_merges:
+            if not candidates:
                 break
 
-            pair_to_merge = min(possible_merges, key=lambda x: x[1])[0]
-            merge_idx = self.merges[pair_to_merge]
-            tokens = merge(tokens, pair_to_merge, merge_idx)
+            _, idx, pair = min(candidates)
 
-        return tokens[:max_len]
+            merged = "".join(pair)
+            word = word[:idx] + [merged] + word[idx + 2 :]
 
-    def decode(self, tokens: List[int]) -> str:
-        byte_data = b"".join(self.vocab[token] for token in tokens)
-        return byte_data.decode("utf-8", errors="replace")
+        return word
 
-    def get_vocab(self) -> Dict[str, int]:
-        if not self.str_to_token:
-            self._build_str_to_token_map()
-        return self.str_to_token.copy()
+    def _merge_word(
+        self, word: Tuple[str, ...], pair: Tuple[str, str]
+    ) -> Tuple[str, ...]:
+        new_word = []
+        i = 0
+        while i < len(word):
+            if i < len(word) - 1 and word[i] == pair[0] and word[i + 1] == pair[1]:
+                new_word.append("".join(pair))
+                i += 2
+            else:
+                new_word.append(word[i])
+                i += 1
+        return tuple(new_word)
 
+    def detokenize(self, tokens: List[str]) -> str:
+        text = "".join(tokens)
+        text = text.replace(self.end_of_word, " ")
+        return " ".join(text.split())
 
-def get_common_pair(tokens):
-    count = {}
-    for i in range(len(tokens) - 1):
-        pair = (tokens[i], tokens[i + 1])
-        count[pair] = count.get(pair, 0) + 1
-    return count
+    def save(self, path: str):
+        data = {
+            "vocab": self.vocab,
+            "merges": self.merges,
+            "end_of_word": self.end_of_word,
+        }
+        with open(path, "w") as f:
+            json.dump(data, f)
 
+    def load(self, path: str):
+        with open(path, "r") as f:
+            data = json.load(f)
 
-def merge(ids, pair, idx):
-    new_list = []
-    i = 0
-    while i < len(ids):
-        if i < len(ids) - 1 and ids[i] == pair[0] and ids[i + 1] == pair[1]:
-            new_list.append(idx)
-            i += 2
-        else:
-            new_list.append(ids[i])
-            i += 1
-    return new_list
+        self.vocab = data["vocab"]
 
+        merges: List[Tuple[str, str]] = []
+        for pair in data["merges"]:
+            a, b = pair
+            merges.append((a, b))
 
-if __name__ == "__main__":
-    bpe = BPE(vocab_size=300)
-
-    text = "This was not the map we found in Billy Bones's chest, but an accurate copy, complete in all things names and heights and soundings with the single exception of the red crosses and the written notes."
-
-    bpe.build_vocab([text], vocab_size=300)
-
-    test_text = "hello world"
-    encoded = bpe.encode(test_text)
-    print(f"\nOriginal: {test_text}")
-    print(f"Encoded: {encoded}")
-    decoded = bpe.decode(encoded)
-    print(f"Decoded: {decoded}")
-
-    print(f"\nVocabulary size: {len(bpe.vocab)}")
-    print(f"Learned {len(bpe.merges)} merges")
-    print("\nFirst 10 merges:")
-    for i, (pair, idx) in enumerate(list(bpe.merges.items())[:10]):
-        pair_bytes = bpe.vocab[pair[0]] + bpe.vocab[pair[1]]
-        print(f"  {pair} -> {idx} ('{pair_bytes.decode('utf-8', errors='replace')}')")
-
-    vocab_dict = bpe.get_vocab()
-    print("\nSample vocabulary entries:")
-    for i, (token_str, token_id) in enumerate(list(vocab_dict.items())[:10]):
-        print(f"  '{token_str}' -> {token_id}")
+        self.merges = merges
+        self.end_of_word = data["end_of_word"]
+        self.merge_ranks = {pair: i for i, pair in enumerate(self.merges)}

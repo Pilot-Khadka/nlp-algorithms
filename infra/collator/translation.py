@@ -70,9 +70,9 @@ class TranslationCollator(BaseCollator):
     def _collate_transformer(
         self, src_encoded: List[List[int]], tgt_encoded: List[List[int]]
     ) -> Dict[str, Tensor]:
-        src_seqs = [torch.tensor(seq, dtype=torch.long) for seq in src_encoded]
-        tgt_input = [torch.tensor(seq[:-1], dtype=torch.long) for seq in tgt_encoded]
-        tgt_label = [torch.tensor(seq[1:], dtype=torch.long) for seq in tgt_encoded]
+        src_seqs = [torch.as_tensor(seq, dtype=torch.long) for seq in src_encoded]
+        tgt_input = [torch.as_tensor(seq[:-1], dtype=torch.long) for seq in tgt_encoded]
+        tgt_label = [torch.as_tensor(seq[1:], dtype=torch.long) for seq in tgt_encoded]
 
         src_ids = pad_sequence(src_seqs, batch_first=True, padding_value=self.pad_id)
         tgt_ids = pad_sequence(tgt_input, batch_first=True, padding_value=self.pad_id)
@@ -94,7 +94,6 @@ class TranslationCollator(BaseCollator):
 
 if __name__ == "__main__":
     import torch
-    from torch.utils.data import DataLoader
 
     from dataset.downloader import TatoebaDownloader
     from dataset.reader import TatoebaDataset
@@ -120,9 +119,3 @@ if __name__ == "__main__":
     for item in train_dataset:
         src_tokens.extend(src_tokenizer.tokenize(item["src"]))
         tgt_tokens.extend(tgt_tokenizer.tokenize(item["tgt"]))
-
-    src_vocab = Vocabulary.from_tokens(tokens=src_tokens, vocab_size=10000, min_freq=1)
-    tgt_vocab = Vocabulary.from_tokens(tokens=tgt_tokens, vocab_size=10000, min_freq=1)
-
-    print("Source vocab size:", len(src_vocab))
-    print("Target vocab size:", len(tgt_vocab))

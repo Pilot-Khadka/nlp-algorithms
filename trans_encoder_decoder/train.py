@@ -190,9 +190,17 @@ def get_dataloaders_distributed(config, world_size):
     )
 
     tokenizer = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
-    src_vocab = build_vocab_from_key(dataset=train, tokenizer=tokenizer, key="src")
+    src_vocab = build_vocab_from_key(
+        dataset=train,
+        config=config,
+        tokenizer=tokenizer,
+        key="src",
+    )
     tgt_vocab = build_vocab_from_key(
-        dataset=train, tokenizer=tokenizer, key="tgt"
+        dataset=train,
+        config=config,
+        tokenizer=tokenizer,
+        key="tgt",
     )  # note train for target also
 
     processed_train = PreprocessedDataset(
@@ -420,14 +428,14 @@ def main():
             "url": "https://object.pouta.csc.fi/Tatoeba-Challenge-v2023-09-26/eng-nep.tar",
             "data_dir": "../dataset/dataset_tatoeba_eng_nep/",
             "vocab_size": 10000,
-            "sequence_length": 256,
+            "sequence_length": 80,
             "max_samples": 1000000,
         },
         "model": {
-            "d_model": 512,
-            "num_layers": 6,
-            "num_heads": 8,
-            "d_ff": 2048,
+            "d_model": 256,
+            "num_layers": 3,
+            "num_heads": 4,
+            "d_ff": 1024,
         },
         "train": {
             "batch_size": 128,

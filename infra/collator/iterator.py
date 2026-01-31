@@ -28,7 +28,7 @@ class CorpusLanguageModelingDataset:
             batch_first: If True, return (batch_size, seq_len), else (seq_len, batch_size)
         """
         self.base = base_dataset
-        self.tokenizer = tokenizer()
+        self.tokenizer = tokenizer
         self.vocab = vocab
         self.batch_size = batch_size
         self.seq_len = seq_len
