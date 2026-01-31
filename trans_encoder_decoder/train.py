@@ -178,12 +178,22 @@ def get_dataloaders_distributed(config, world_size):
     data_dir = data_downloader_cls().download_and_prepare(config)
 
     data_reader_cls = get_from_registry(DATA_READER_REGISTRY, config.dataset.name)
-    train = data_reader_cls(data_dir=data_dir, split="train")
-    test = data_reader_cls(data_dir=data_dir, split="test")
+    train = data_reader_cls(
+        data_dir=data_dir,
+        split="train",
+        max_samples=config.dataset.max_samples,
+    )
+    test = data_reader_cls(
+        data_dir=data_dir,
+        split="test",
+        max_samples=config.dataset.max_samples,
+    )
 
     tokenizer = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
     src_vocab = build_vocab_from_key(dataset=train, tokenizer=tokenizer, key="src")
-    tgt_vocab = build_vocab_from_key(dataset=test, tokenizer=tokenizer, key="tgt")
+    tgt_vocab = build_vocab_from_key(
+        dataset=train, tokenizer=tokenizer, key="tgt"
+    )  # note train for target also
 
     processed_train = PreprocessedDataset(
         train,
@@ -411,6 +421,7 @@ def main():
             "data_dir": "../dataset/dataset_tatoeba_eng_nep/",
             "vocab_size": 10000,
             "sequence_length": 256,
+            "max_samples": 1000000,
         },
         "model": {
             "d_model": 512,

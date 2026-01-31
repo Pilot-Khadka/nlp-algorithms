@@ -3,6 +3,7 @@ downloader -> reader  -> preprocessor(tokenize+encode) -> dataloader -> collator
 """
 
 import torch
+from tqdm import tqdm
 
 _TASK_REGISTRY = {}
 
@@ -43,45 +44,32 @@ class PreprocessedDataset(torch.utils.data.Dataset):
         max_len,
         target_vocab=None,
     ):
-        self.base = base_dataset
-        self.tokenizer = tokenizer()
-        self.vocab = vocab
-        self.target_vocab = target_vocab
-        self.max_len = max_len
         self.task = task
-
-        if task not in _TASK_REGISTRY:
-            raise ValueError(
-                f"Unknown task: {task}. Available tasks: {list(_TASK_REGISTRY.keys())}"
-            )
         self.builder = _TASK_REGISTRY[task]()
+        self.max_len = max_len
 
-        if task == "translation" and target_vocab is None:
-            raise ValueError("Translation task requires target_vocab to be provided")
+        self.examples = []
+        tokenizer = tokenizer()
+        for item in tqdm(base_dataset, desc=f"Building {task} dataset"):
+            task_spec = self.builder.build(item)
+            example = {}
+            if "input_ids" in task_spec:
+                tokens = tokenizer.tokenize(task_spec["input_ids"])
+                encoded = torch.tensor(vocab.encode(tokens)[:max_len], dtype=torch.long)
+                example["input_ids"] = encoded
+            if "labels" in task_spec:
+                assert target_vocab is not None
+                tokens = tokenizer.tokenize(task_spec["labels"])
+                encoded = torch.tensor(
+                    target_vocab.encode(tokens)[:max_len], dtype=torch.long
+                )
+                example["labels"] = encoded
+            if "label" in task_spec:
+                example["label"] = task_spec["label"]
+            self.examples.append(example)
 
     def __len__(self):
-        return len(self.base)
+        return len(self.examples)
 
     def __getitem__(self, index):
-        item = self.base[index]
-
-        task_spec = self.builder.build(item)
-        result = {}
-
-        if "input_ids" in task_spec:
-            text = task_spec["input_ids"]
-            tokens = self.tokenizer.tokenize(text)
-            encoded = self.vocab.encode(tokens)[: self.max_len]
-            result["input_ids"] = encoded
-
-        if "labels" in task_spec:
-            assert self.target_vocab is not None
-            label_text = task_spec["labels"]
-            label_tokens = self.tokenizer.tokenize(label_text)
-            label_encoded = self.target_vocab.encode(label_tokens)[: self.max_len]
-            result["labels"] = label_encoded
-
-        if "label" in task_spec:
-            result["label"] = task_spec["label"]
-
-        return result
+        return self.examples[index]

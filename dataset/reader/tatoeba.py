@@ -1,13 +1,15 @@
-import os
+from typing import Optional
 
+import os
 import torch
+from tqdm import tqdm
 
 from engine.registry import register_reader
 
 
 @register_reader("tatoeba")
 class TatoebaDataset(torch.utils.data.Dataset):
-    def __init__(self, data_dir: str, split: str):
+    def __init__(self, data_dir: str, split: str, max_samples: Optional[int] = None):
         self.split = split
         self.data_dir = data_dir
         self.src_file = os.path.join(data_dir, f"{split}.src")
@@ -18,29 +20,36 @@ class TatoebaDataset(torch.utils.data.Dataset):
 
         with open(self.src_file, "r", encoding="utf-8") as f:
             offset = 0
-            for line in f:
+            for line in tqdm(f, desc="Indexing src"):
                 self.src_offsets.append(offset)
                 offset += len(line.encode("utf-8"))
 
         with open(self.trg_file, "r", encoding="utf-8") as f:
             offset = 0
-            for line in f:
+            for line in tqdm(f, desc="Indexing trg"):
                 self.trg_offsets.append(offset)
                 offset += len(line.encode("utf-8"))
+
+        if max_samples is not None:
+            self.src_offsets = self.src_offsets[:max_samples]
+            self.trg_offsets = self.trg_offsets[:max_samples]
+
+        self._src_f = open(self.src_file, "r", encoding="utf-8")
+        self._trg_f = open(self.trg_file, "r", encoding="utf-8")
 
     def __len__(self):
         return len(self.src_offsets)
 
     def __getitem__(self, index):
-        with (
-            open(self.src_file, "r", encoding="utf-8") as src_f,
-            open(self.trg_file, "r", encoding="utf-8") as trg_f,
-        ):
-            src_f.seek(self.src_offsets[index])
-            trg_f.seek(self.trg_offsets[index])
-            src_line = src_f.readline().strip()
-            trg_line = trg_f.readline().strip()
-            return {"src": src_line, "tgt": trg_line}
+        self._src_f.seek(self.src_offsets[index])
+        self._trg_f.seek(self.trg_offsets[index])
+        src_line = self._src_f.readline().strip()
+        trg_line = self._trg_f.readline().strip()
+        return {"src": src_line, "tgt": trg_line}
+
+    def __del__(self):
+        self._src_f.close()
+        self._trg_f.close()
 
 
 if __name__ == "__main__":

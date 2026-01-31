@@ -1,3 +1,4 @@
+import gc
 from tqdm import tqdm
 from collections import Counter
 
@@ -50,7 +51,6 @@ def build_vocab_from_key(
         val = item[key]
 
         if tokenizer is not None:
-            # text field
             if isinstance(val, str):
                 counter.update(tokenizer.tokenize(val))
             elif isinstance(val, list):
@@ -59,7 +59,6 @@ def build_vocab_from_key(
             else:
                 raise ValueError(f"Unsupported type for key '{key}': {type(val)}")
         else:
-            # label field
             if isinstance(val, list):
                 counter.update(val)
             else:
@@ -73,6 +72,10 @@ def build_vocab_from_key(
         if freq >= min_freq and token not in token_to_id:
             token_to_id[token] = idx
             idx += 1
+
+    # free memory
+    del counter
+    gc.collect()
 
     return Vocabulary(token_to_id)
 
@@ -98,7 +101,10 @@ class DatasetBundleBuilder:
 
         if config.task.name in {"classification", "ner"}:
             label_vocab = build_vocab_from_key(
-                train, key="label", tokenizer=None, vocab_size=config.dataset.vocab_size
+                train,
+                key="label",
+                tokenizer=None,
+                vocab_size=config.dataset.vocab_size,
             )
         elif config.task.name == "translation":
             src_vocab = build_vocab_from_key(
