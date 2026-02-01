@@ -159,32 +159,33 @@ def calculate_bleu(
 
 
 def greedy_decode(
-    model, src, src_mask, max_len, tgt_vocab, device, pad_idx=0, sos_idx=1, eos_idx=2
+    model,
+    src,
+    src_mask,
+    max_len,
+    tgt_vocab,
+    device,
+    pad_idx,
+    sos_idx,
+    eos_idx,
 ):
-    """
-    Greedy decoding for translation.
+    if sos_idx is None:
+        sos_idx = tgt_vocab.get("<sos>", tgt_vocab.get("<bos>", 1))
+    if eos_idx is None:
+        eos_idx = tgt_vocab.get("<eos>", tgt_vocab.get("</s>", 2))
+    if pad_idx is None:
+        pad_idx = tgt_vocab.get("<pad>", 0)
 
-    Args:
-        model: The sequence-to-sequence model
-        src: Source sequence [batch_size, src_len]
-        src_mask: Source mask
-        max_len: Maximum length for generation
-        tgt_vocab: Target vocabulary
-        device: Device to use
-        pad_idx: Padding token index
-        sos_idx: Start-of-sequence token index
-        eos_idx: End-of-sequence token index
-
-    Returns:
-        Generated sequences [batch_size, max_len]
-    """
     batch_size = src.size(0)
-
     generated = torch.full((batch_size, 1), sos_idx, dtype=torch.long, device=device)
 
+    finished = torch.zeros(batch_size, dtype=torch.bool, device=device)
+
     for _ in range(max_len - 1):
+        tgt_len = generated.size(1)
+
         tgt_mask = (
-            torch.tril(torch.ones(generated.size(1), generated.size(1), device=device))
+            torch.tril(torch.ones(tgt_len, tgt_len, device=device))
             .bool()
             .unsqueeze(0)
             .unsqueeze(0)
@@ -193,40 +194,32 @@ def greedy_decode(
         with torch.no_grad():
             logits = model(src, generated, src_mask, tgt_mask)
 
-        next_token = logits[:, -1, :].argmax(dim=-1, keepdim=True)
+        next_token = logits[:, -1, :].argmax(dim=-1)
 
-        generated = torch.cat([generated, next_token], dim=1)
+        next_token = torch.where(
+            finished, torch.tensor(pad_idx, device=device), next_token
+        )
 
-        if (next_token == eos_idx).all():
+        generated = torch.cat([generated, next_token.unsqueeze(1)], dim=1)
+        finished = finished | (next_token == eos_idx)
+
+        if finished.all():
             break
 
     return generated
 
 
-def tokens_to_words(token_ids, vocab, pad_idx=0, eos_idx=1):
-    """
-    Convert token IDs to words.
-
-    Args:
-        token_ids: Tensor or list of token IDs
-        vocab: Vocabulary object
-        pad_idx: Padding token index
-        eos_idx: End-of-sequence token index
-
-    Returns:
-        List of words
-    """
+def tokens_to_words(token_ids, vocab, pad_idx=0, eos_idx=3):
     if isinstance(token_ids, torch.Tensor):
         token_ids = token_ids.tolist()
 
-    words = []
-    for token_id in token_ids:
-        if token_id in [pad_idx, eos_idx]:
-            continue
-        word = vocab.decode([token_id])[0]
-        words.append(word)
+    if eos_idx in token_ids:
+        token_ids = token_ids[: token_ids.index(eos_idx)]
 
-    return words
+    token_ids = [t for t in token_ids if t != pad_idx]
+    text = vocab.decode(token_ids)
+    # return text.strip().split()
+    return "".join(text)
 
 
 def train_epoch(
@@ -304,6 +297,8 @@ def evaluate(
     pad_idx=0,
     rank=0,
     world_size=1,
+    sos_idx=2,
+    eos_idx=3,
 ):
     """
     inputs:
@@ -359,6 +354,8 @@ def evaluate(
                     tgt_vocab,
                     device,
                     pad_idx=pad_idx,
+                    sos_idx=sos_idx,
+                    eos_idx=eos_idx,
                 )
 
                 for i in range(src_ids.size(0)):
@@ -411,10 +408,10 @@ def get_dataloaders_distributed(config, world_size):
         max_samples=config.dataset.max_samples,
     )
 
-    tokenizer_cls = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
+    tokenizer_src = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
 
     tokenizer_kwargs = {}
-    sig = inspect.signature(tokenizer_cls.__init__)
+    sig = inspect.signature(tokenizer_src.__init__)
 
     if "vocab_size" in sig.parameters:
         bpe_vocab_size = getattr(
@@ -422,24 +419,38 @@ def get_dataloaders_distributed(config, world_size):
         )
         tokenizer_kwargs["vocab_size"] = bpe_vocab_size
 
-    tokenizer = tokenizer_cls(**tokenizer_kwargs)
+    tokenizer_src = tokenizer_src(**tokenizer_kwargs)
+
+    tokenizer_tgt = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
+
+    tokenizer_kwargs = {}
+    sig = inspect.signature(tokenizer_tgt.__init__)
+
+    if "vocab_size" in sig.parameters:
+        bpe_vocab_size = getattr(
+            config.tokenizer, "vocab_size", config.dataset.vocab_size
+        )
+        tokenizer_kwargs["vocab_size"] = bpe_vocab_size
+
+    tokenizer_tgt = tokenizer_tgt(**tokenizer_kwargs)
 
     src_vocab = build_vocab_from_key(
         dataset=train,
         config=config,
-        tokenizer=tokenizer,
+        tokenizer=tokenizer_src,
         key="src",
     )
     tgt_vocab = build_vocab_from_key(
         dataset=train,
         config=config,
-        tokenizer=tokenizer,
+        tokenizer=tokenizer_tgt,
         key="tgt",
     )
 
     processed_train = PreprocessedDataset(
         train,
-        tokenizer,
+        src_tokenizer=tokenizer_src,
+        tgt_tokenizer=tokenizer_tgt,
         vocab=src_vocab,
         target_vocab=tgt_vocab,
         max_len=config.dataset.sequence_length,
@@ -447,7 +458,8 @@ def get_dataloaders_distributed(config, world_size):
     )
     processed_test = PreprocessedDataset(
         test,
-        tokenizer,
+        src_tokenizer=tokenizer_src,
+        tgt_tokenizer=tokenizer_tgt,
         vocab=src_vocab,
         target_vocab=tgt_vocab,
         max_len=config.dataset.sequence_length,
@@ -732,7 +744,7 @@ def main():
             "url": "https://object.pouta.csc.fi/Tatoeba-Challenge-v2023-09-26/eng-nep.tar",
             "data_dir": "../dataset/dataset_tatoeba_eng_nep/",
             "vocab_size": 10000,
-            "sequence_length": 80,
+            "sequence_length": 128,
             "max_samples": 1000000,
         },
         "model": {
@@ -743,8 +755,8 @@ def main():
         },
         "train": {
             "batch_size": 128,
-            "num_epochs": 20,
-            "learning_rate": 1e-4,
+            "num_epochs": 50,
+            "learning_rate": 5e-4,
             "checkpoint_dir": "checkpoint",
             "save_every": 5,
         },

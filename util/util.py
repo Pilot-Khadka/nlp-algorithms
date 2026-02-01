@@ -162,7 +162,8 @@ def load_checkpoint(
     return start_epoch, best_valid_loss
 
 
-def resolve_tokenizer_path(config):
+def resolve_tokenizer_path(config, key):
+    """we also need key because there can be two tokenizers for translation"""
     checkpoint_dir = getattr(config, "checkpoint_dir", "./checkpoint")
     os.makedirs(checkpoint_dir, exist_ok=True)
 
@@ -170,8 +171,13 @@ def resolve_tokenizer_path(config):
     dataset_name = config.dataset.name
     tokenizer_name = config.tokenizer.name
 
-    pickle_path = os.path.join(
-        checkpoint_dir, f"{dataset_name}_{task_name}_{tokenizer_name}.pkl"
-    )
+    if key in ["tgt", "src"]:
+        pickle_path = os.path.join(
+            checkpoint_dir, f"{dataset_name}_{task_name}_{tokenizer_name}_{key}.pkl"
+        )
+    else:
+        pickle_path = os.path.join(
+            checkpoint_dir, f"{dataset_name}_{task_name}_{tokenizer_name}.pkl"
+        )
 
     return pickle_path

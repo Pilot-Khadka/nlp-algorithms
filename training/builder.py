@@ -127,42 +127,11 @@ class TrainerBuilder:
         return self.build_standard_dataloaders(data_bundle)
 
     def _build_language_modeling_loaders(self, data_bundle):
-        tokenizer_cls = get_from_registry(
-            TOKENIZER_REGISTRY, self.config.tokenizer.name
-        )
-
-        tokenizer_kwargs = {}
-        sig = inspect.signature(tokenizer_cls.__init__)
-        if "vocab_size" in sig.parameters:
-            bpe_vocab_size = getattr(
-                self.config.tokenizer, "vocab_size", self.config.dataset.vocab_size
-            )
-            tokenizer_kwargs["vocab_size"] = bpe_vocab_size
-
-        tokenizer = tokenizer_cls(**tokenizer_kwargs)
-        if _is_trainable_tokenizer(tokenizer):
-            checkpoint_dir = getattr(self.config, "checkpoint_dir", "./checkpoint")
-            os.makedirs(checkpoint_dir, exist_ok=True)
-            pickle_path = resolve_tokenizer_path(self.config)
-
-            if os.path.exists(pickle_path):
-                print(f"[LM] Loading tokenizer from: {pickle_path}")
-                with open(pickle_path, "rb") as f:
-                    state = pickle.load(f)
-                tokenizer.vocab = state["vocab"]
-                tokenizer.merges = state["merges"]
-
-            else:
-                raise RuntimeError(
-                    f"[LM] Trainable tokenizer requires a saved .pkl file, "
-                    f"but none found at: {pickle_path}\n"
-                    f"Tokenizer must be trained earlier in DatasetBundleBuilder."
-                )
         collator_class = get_from_registry(COLLATOR_REGISTRY, self.config.task.name)
 
         train_iterator = collator_class(
             base_dataset=data_bundle.train,
-            tokenizer=tokenizer,
+            tokenizer=data_bundle.src_tokenizer,
             vocab=data_bundle.vocab,
             batch_size=self.config.train.batch_size,
             seq_len=self.config.dataset.sequence_length,
@@ -172,7 +141,7 @@ class TrainerBuilder:
 
         test_iterator = collator_class(
             base_dataset=data_bundle.test,
-            tokenizer=tokenizer,
+            tokenizer=data_bundle.src_tokenizer,
             vocab=data_bundle.vocab,
             batch_size=self.config.train.batch_size,
             seq_len=self.config.dataset.sequence_length,
@@ -189,51 +158,20 @@ class TrainerBuilder:
         return train_iterator, test_iterator
 
     def build_standard_dataloaders(self, data_bundle) -> tuple[DataLoader, DataLoader]:
-        tokenizer_cls = get_from_registry(
-            TOKENIZER_REGISTRY, self.config.tokenizer.name
-        )
-
-        tokenizer_kwargs = {}
-        sig = inspect.signature(tokenizer_cls.__init__)
-        if "vocab_size" in sig.parameters:
-            bpe_vocab_size = getattr(
-                self.config.tokenizer, "vocab_size", self.config.dataset.vocab_size
-            )
-            tokenizer_kwargs["vocab_size"] = bpe_vocab_size
-
-        tokenizer = tokenizer_cls(**tokenizer_kwargs)
-
-        if _is_trainable_tokenizer(tokenizer):
-            checkpoint_dir = getattr(self.config, "checkpoint_dir", "./checkpoint")
-            os.makedirs(checkpoint_dir, exist_ok=True)
-            pickle_path = os.path.join(checkpoint_dir, "lm_tokenizer.pkl")
-
-            if os.path.exists(pickle_path):
-                print(f"[LM] Loading tokenizer from: {pickle_path}")
-                with open(pickle_path, "rb") as f:
-                    state = pickle.load(f)
-                    tokenizer.vocab = state["vocab"]
-                    tokenizer.merges = state["merges"]
-
-            else:
-                raise RuntimeError(
-                    f"[LM] Trainable tokenizer requires a saved .pkl file, "
-                    f"but none found at: {pickle_path}\n"
-                    f"Tokenizer must be trained earlier in DatasetBundleBuilder."
-                )
-
         processed_train = PreprocessedDataset(
             data_bundle.train,
-            tokenizer,
-            data_bundle.vocab,
+            src_tokenizer=data_bundle.src_tokenizer,
+            tgt_tokenizer=data_bundle.tgt_tokenizer,
+            vocab=data_bundle.vocab,
             max_len=self.config.dataset.sequence_length,
             task=self.config.task.name,
         )
 
         processed_test = PreprocessedDataset(
             data_bundle.test,
-            tokenizer,
-            data_bundle.vocab,
+            src_tokenizer=data_bundle.src_tokenizer,
+            tgt_tokenizer=data_bundle.tgt_tokenizer,
+            vocab=data_bundle.vocab,
             max_len=self.config.dataset.sequence_length,
             task=self.config.task.name,
         )

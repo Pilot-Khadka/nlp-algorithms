@@ -31,6 +31,8 @@ class LanguageModelingBuilder:
 @register("translation")
 class TranslationBuilder:
     def build(self, example):
+        # builder returns raw strings (src/tgt)
+        # tokenization happens in PreprocessedDataset
         return {"input_ids": example["src"], "labels": example["tgt"]}
 
 
@@ -38,33 +40,51 @@ class PreprocessedDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         base_dataset,
-        tokenizer,
+        src_tokenizer,
         vocab,
         task,
         max_len,
         target_vocab=None,
+        tgt_tokenizer=None,
     ):
         self.task = task
         self.builder = _TASK_REGISTRY[task]()
         self.max_len = max_len
 
+        is_translation = task == "translation"
+
+        if is_translation:
+            if tgt_tokenizer is None:
+                raise ValueError("tgt_tokenizer must be provided for translation task.")
+            if target_vocab is None:
+                raise ValueError("target_vocab must be provided for translation task.")
+
         self.examples = []
         for item in tqdm(base_dataset, desc=f"Building {task} dataset"):
             task_spec = self.builder.build(item)
             example = {}
+
             if "input_ids" in task_spec:
-                tokens = tokenizer.tokenize(task_spec["input_ids"])
-                encoded = torch.tensor(vocab.encode(tokens)[:max_len], dtype=torch.long)
-                example["input_ids"] = encoded
+                tokens = src_tokenizer.tokenize(task_spec["input_ids"])
+                encoded = vocab.encode(tokens)[:max_len]
+                example["input_ids"] = torch.tensor(encoded, dtype=torch.long)
+
             if "labels" in task_spec:
-                assert target_vocab is not None
-                tokens = tokenizer.tokenize(task_spec["labels"])
-                encoded = torch.tensor(
-                    target_vocab.encode(tokens)[:max_len], dtype=torch.long
-                )
-                example["labels"] = encoded
+                if is_translation:
+                    assert tgt_tokenizer is not None
+                    assert target_vocab is not None
+                    tokens = tgt_tokenizer.tokenize(task_spec["labels"])
+                    encoded = target_vocab.encode(tokens)[:max_len]
+                else:
+                    raise ValueError(
+                        f"Task '{task}' produced string labels but no tgt_tokenizer is set."
+                    )
+
+                example["labels"] = torch.tensor(encoded, dtype=torch.long)
+
             if "label" in task_spec:
                 example["label"] = task_spec["label"]
+
             self.examples.append(example)
 
     def __len__(self):

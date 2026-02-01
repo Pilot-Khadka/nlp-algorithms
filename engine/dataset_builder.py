@@ -28,7 +28,8 @@ class DatasetBundle:
         label_vocab=None,
         src_vocab=None,
         tgt_vocab=None,
-        tokenizer=None,
+        src_tokenizer=None,
+        tgt_tokenizer=None,
     ):
         self.train = train_dataset
         self.val = val_dataset
@@ -37,7 +38,8 @@ class DatasetBundle:
         self.label_vocab = label_vocab
         self.src_vocab = src_vocab
         self.tgt_vocab = tgt_vocab
-        self.tokenizer = tokenizer
+        self.src_tokenizer = src_tokenizer
+        self.tgt_tokenizer = tgt_tokenizer
 
 
 def _is_trainable_tokenizer(tokenizer) -> bool:
@@ -81,12 +83,17 @@ def build_vocab_from_key(
     For stateless tokenizers (Whitespace): Counts tokens and builds vocab from frequencies
     """
     if special_tokens is None:
-        special_tokens = {"<pad>": 0, "<unk>": 1}
+        special_tokens = {
+            "<pad>": 0,
+            "<unk>": 1,
+            "<sos>": 2,
+            "<eos>": 3,
+        }
 
     if tokenizer is not None and _is_trainable_tokenizer(tokenizer):
         checkpoint_dir = getattr(dataset, "checkpoint_dir", "./checkpoint")
         os.makedirs(checkpoint_dir, exist_ok=True)
-        save_path = resolve_tokenizer_path(config)
+        save_path = resolve_tokenizer_path(config, key)
 
         if os.path.exists(save_path):
             print(f"Loading saved tokenizer from: {save_path}")
@@ -182,6 +189,7 @@ class DatasetBundleBuilder:
             tokenizer_kwargs["vocab_size"] = bpe_vocab_size
 
         tokenizer = tokenizer_cls(**tokenizer_kwargs)
+        tgt_tokenizer = None
 
         label_vocab = None
         token_vocab = None
@@ -229,5 +237,6 @@ class DatasetBundleBuilder:
             label_vocab=label_vocab,
             src_vocab=src_vocab,
             tgt_vocab=tgt_vocab,
-            tokenizer=tokenizer,
+            src_tokenizer=tokenizer,
+            tgt_tokenizer=tgt_tokenizer,
         )

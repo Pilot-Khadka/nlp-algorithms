@@ -2,9 +2,39 @@ from typing import Optional
 
 import os
 import torch
+import numpy as np
 from tqdm import tqdm
 
 from engine.registry import register_reader
+
+
+def build_or_load_index(text_file, max_samples=None, desc="Indexing"):
+    idx_file = text_file + ".idx"
+
+    if os.path.exists(idx_file):
+        data = np.load(idx_file)
+        if max_samples is not None:
+            data = data[:max_samples]
+        return data
+
+    offsets = []
+    with open(text_file, "r", encoding="utf-8") as f:
+        pbar = tqdm(desc=desc)
+        while True:
+            offset = f.tell()
+            line = f.readline()
+            if not line:
+                break
+            offsets.append(offset)
+            pbar.update(1)
+
+            if max_samples is not None and len(offsets) >= max_samples:
+                break
+        pbar.close()
+
+    offsets_np = np.array(offsets, dtype=np.int64)
+    np.save(idx_file, offsets_np)
+    return offsets_np
 
 
 @register_reader("tatoeba")
@@ -15,41 +45,35 @@ class TatoebaDataset(torch.utils.data.Dataset):
         self.src_file = os.path.join(data_dir, f"{split}.src")
         self.trg_file = os.path.join(data_dir, f"{split}.trg")
 
-        self.src_offsets = []
-        self.trg_offsets = []
+        self.src_offsets = build_or_load_index(
+            self.src_file, max_samples, "Indexing src"
+        )
+        self.trg_offsets = build_or_load_index(
+            self.trg_file, max_samples, "Indexing trg"
+        )
 
-        with open(self.src_file, "r", encoding="utf-8") as f:
-            offset = 0
-            for line in tqdm(f, desc="Indexing src"):
-                self.src_offsets.append(offset)
-                offset += len(line.encode("utf-8"))
+        self.n = len(self.src_offsets)
 
-        with open(self.trg_file, "r", encoding="utf-8") as f:
-            offset = 0
-            for line in tqdm(f, desc="Indexing trg"):
-                self.trg_offsets.append(offset)
-                offset += len(line.encode("utf-8"))
-
-        if max_samples is not None:
-            self.src_offsets = self.src_offsets[:max_samples]
-            self.trg_offsets = self.trg_offsets[:max_samples]
-
-        self._src_f = open(self.src_file, "r", encoding="utf-8")
-        self._trg_f = open(self.trg_file, "r", encoding="utf-8")
+        self._src_f = open(self.src_file, "r", encoding="utf-8", newline="")
+        self._trg_f = open(self.trg_file, "r", encoding="utf-8", newline="")
 
     def __len__(self):
-        return len(self.src_offsets)
+        return self.n
 
     def __getitem__(self, index):
-        self._src_f.seek(self.src_offsets[index])
-        self._trg_f.seek(self.trg_offsets[index])
-        src_line = self._src_f.readline().strip()
-        trg_line = self._trg_f.readline().strip()
-        return {"src": src_line, "tgt": trg_line}
+        self._src_f.seek(int(self.src_offsets[index]))
+        self._trg_f.seek(int(self.trg_offsets[index]))
+        return {
+            "src": self._src_f.readline().rstrip("\n"),
+            "tgt": self._trg_f.readline().rstrip("\n"),
+        }
 
     def __del__(self):
-        self._src_f.close()
-        self._trg_f.close()
+        try:
+            self._src_f.close()
+            self._trg_f.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
