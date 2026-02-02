@@ -1,6 +1,3 @@
-from typing import List
-
-
 import os
 import json
 import math
@@ -78,83 +75,96 @@ def is_main_process(rank):
 
 
 def create_masks(src, tgt, pad_idx=0):
+    """
+    boolean mask
+    src mask shape: (batch, 1, 1, sequence_length)
+    tgt mask shape: (batch, 1, T, T)
+    """
+    B, T = tgt.size()
+
+    # boolean mask
     src_mask = (src != pad_idx).unsqueeze(1).unsqueeze(2)
-    tgt_padding_mask = (tgt != pad_idx).unsqueeze(1).unsqueeze(2)
-    tgt_len = tgt.size(1)
-    tgt_causal_mask = torch.tril(torch.ones(tgt_len, tgt_len, device=tgt.device)).bool()
-    tgt_mask = tgt_padding_mask & tgt_causal_mask
+
+    # padding mask: (B, 1, 1, T)
+    # boolean mask
+    tgt_padding = (tgt != pad_idx).unsqueeze(1).unsqueeze(1)
+
+    # causal mask: (1, 1, T, T)
+    causal = (
+        torch.tril(torch.ones((T, T), device=tgt.device))
+        .bool()
+        .unsqueeze(0)
+        .unsqueeze(0)
+    )
+
+    # final shape: (B, 1, T, T)
+    tgt_mask = tgt_padding & causal
     return src_mask, tgt_mask
 
 
-def calculate_bleu(
-    references: List[List[str]], hypotheses: List[List[str]], max_n: int = 4
-) -> dict:
-    """
-    Compute BLEU score for machine translation evaluation.
-
-    Args:
-        references: List of reference translations (each as list of tokens)
-        hypotheses: List of hypothesis translations (each as list of tokens)
-        max_n: Maximum n-gram order (default: 4)
-
-    Returns:
-        Dictionary with BLEU scores
-    """
-    if len(references) != len(hypotheses):
-        raise ValueError("Number of references and hypotheses must match")
-
+def calculate_bleu(references, hypotheses, max_n=4):
+    # references: list[list[str]]
+    # hypotheses: list[list[str]]
     precisions = []
+    clipped_total = [0] * max_n
+    hyp_total = [0] * max_n
 
-    for n in range(1, max_n + 1):
-        ref_counts = Counter()
-        hyp_counts = Counter()
+    assert len(references) == len(hypotheses)
 
-        for ref, hyp in zip(references, hypotheses):
-            ref_ngrams = [tuple(ref[i : i + n]) for i in range(len(ref) - n + 1)]
-            hyp_ngrams = [tuple(hyp[i : i + n]) for i in range(len(hyp) - n + 1)]
+    for ref, hyp in zip(references, hypotheses):
+        for n in range(1, max_n + 1):
+            ref_counts = Counter(tuple(ref[i : i + n]) for i in range(len(ref) - n + 1))
+            hyp_counts = Counter(tuple(hyp[i : i + n]) for i in range(len(hyp) - n + 1))
 
-            for ngram in ref_ngrams:
-                ref_counts[ngram] += 1
-            for ngram in hyp_ngrams:
-                hyp_counts[ngram] += 1
+            hyp_total[n - 1] += sum(hyp_counts.values())
+            for ng, count in hyp_counts.items():
+                clipped_total[n - 1] += min(count, ref_counts.get(ng, 0))
 
-        clipped_counts = sum(
-            min(hyp_counts[ngram], ref_counts[ngram]) for ngram in hyp_counts
-        )
-        total_hyp_ngrams = sum(hyp_counts.values())
-
-        if total_hyp_ngrams > 0:
-            precision = clipped_counts / total_hyp_ngrams
+    # Modified n-gram precisions
+    for n in range(max_n):
+        if hyp_total[n] == 0:
+            precisions.append(0.0)
         else:
-            precision = 0.0
+            precisions.append(clipped_total[n] / hyp_total[n])
 
-        precisions.append(precision)
+    # Brevity penalty
+    ref_len = sum(len(r) for r in references)
+    hyp_len = sum(len(h) for h in hypotheses)
 
-    ref_length = sum(len(ref) for ref in references)
-    hyp_length = sum(len(hyp) for hyp in hypotheses)
+    if hyp_len == 0:
+        return {
+            "bleu": 0,
+            "bleu-1": 0,
+            "bleu-2": 0,
+            "bleu-3": 0,
+            "bleu-4": 0,
+            "brevity_penalty": 0,
+            "ref_length": 0,
+            "hyp_length": 0,
+        }
 
-    if hyp_length > ref_length:
+    if hyp_len > ref_len:
         bp = 1.0
-    elif hyp_length == 0:
-        bp = 0.0
     else:
-        bp = math.exp(1 - ref_length / hyp_length)
+        bp = math.exp(1 - ref_len / hyp_len)
 
+    # Geometric mean
     if min(precisions) > 0:
-        geo_mean = math.exp(sum(math.log(p) for p in precisions) / max_n)
-        bleu = bp * geo_mean
+        geo = math.exp(sum(math.log(p) for p in precisions) / max_n)
     else:
-        bleu = 0.0
+        geo = 0.0
+
+    bleu = bp * geo
 
     return {
         "bleu": bleu * 100,
         "bleu-1": precisions[0] * 100,
-        "bleu-2": precisions[1] * 100 if len(precisions) > 1 else 0.0,
-        "bleu-3": precisions[2] * 100 if len(precisions) > 2 else 0.0,
-        "bleu-4": precisions[3] * 100 if len(precisions) > 3 else 0.0,
+        "bleu-2": precisions[1] * 100,
+        "bleu-3": precisions[2] * 100,
+        "bleu-4": precisions[3] * 100,
         "brevity_penalty": bp,
-        "ref_length": ref_length,
-        "hyp_length": hyp_length,
+        "ref_length": ref_len,
+        "hyp_length": hyp_len,
     }
 
 
@@ -163,19 +173,10 @@ def greedy_decode(
     src,
     src_mask,
     max_len,
-    tgt_vocab,
     device,
-    pad_idx,
     sos_idx,
     eos_idx,
 ):
-    if sos_idx is None:
-        sos_idx = tgt_vocab.get("<sos>", tgt_vocab.get("<bos>", 1))
-    if eos_idx is None:
-        eos_idx = tgt_vocab.get("<eos>", tgt_vocab.get("</s>", 2))
-    if pad_idx is None:
-        pad_idx = tgt_vocab.get("<pad>", 0)
-
     batch_size = src.size(0)
     generated = torch.full((batch_size, 1), sos_idx, dtype=torch.long, device=device)
 
@@ -197,7 +198,7 @@ def greedy_decode(
         next_token = logits[:, -1, :].argmax(dim=-1)
 
         next_token = torch.where(
-            finished, torch.tensor(pad_idx, device=device), next_token
+            finished, torch.tensor(eos_idx, device=device), next_token
         )
 
         generated = torch.cat([generated, next_token.unsqueeze(1)], dim=1)
@@ -209,21 +210,42 @@ def greedy_decode(
     return generated
 
 
-def tokens_to_words(token_ids, vocab, pad_idx=0, eos_idx=3):
+def tokens_to_words(
+    token_ids,
+    vocab,
+    pad_idx=0,
+    sos_idx=2,
+    eos_idx=3,
+    end_token="</w>",
+):
     if isinstance(token_ids, torch.Tensor):
         token_ids = token_ids.tolist()
 
     if eos_idx in token_ids:
         token_ids = token_ids[: token_ids.index(eos_idx)]
 
-    token_ids = [t for t in token_ids if t != pad_idx]
-    text = vocab.decode(token_ids)
-    # return text.strip().split()
-    return "".join(text)
+    # remove pad + sos
+    token_ids = [t for t in token_ids if t not in {pad_idx, sos_idx}]
+
+    # Decode ids -> string tokens
+    tokens = vocab.decode(token_ids)
+
+    if isinstance(tokens, list):
+        tokens = "".join(tokens)
+
+    tokens = tokens.replace(end_token, " ")
+    return tokens.strip()
 
 
 def train_epoch(
-    model, dataloader, optimizer, criterion, device, pad_idx=0, rank=0, world_size=1
+    model,
+    dataloader,
+    optimizer,
+    criterion,
+    device,
+    pad_idx=0,
+    rank=0,
+    world_size=1,
 ):
     """Train for one epoch and return average loss."""
     model.train()
@@ -259,13 +281,11 @@ def train_epoch(
         loss = criterion(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
 
         non_pad_tokens = (labels != pad_idx).sum().item()
-        batch_loss = loss.item() * logits.size(0) * logits.size(1)
-
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
         optimizer.step()
 
-        total_loss += batch_loss
+        total_loss += loss.item() * non_pad_tokens
         total_tokens += non_pad_tokens
         num_batches += 1
 
@@ -284,6 +304,16 @@ def train_epoch(
         avg_loss = total_loss_tensor.item() / total_tokens_tensor.item()
 
     return avg_loss
+
+
+def clean_ids(ids, pad_idx, sos_idx, eos_idx):
+    out = []
+    for t in ids:
+        if t == eos_idx:
+            break
+        if t not in {pad_idx, sos_idx}:
+            out.append(t)
+    return out
 
 
 def evaluate(
@@ -334,38 +364,39 @@ def evaluate(
             tgt_ids = batch["tgt_ids"].to(device)
             labels = batch["labels"].to(device)
 
+            # for i in range(src_ids.size(0)):
+            #     print("target:", tokens_to_words(token_ids=tgt_ids[i], vocab=tgt_vocab))
+            #     print("labels:", tokens_to_words(token_ids=labels[i], vocab=tgt_vocab))
+
             src_mask, tgt_mask = create_masks(src_ids, tgt_ids, pad_idx)
 
             logits = model(src_ids, tgt_ids, src_mask, tgt_mask)
             loss = criterion(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
 
             non_pad_tokens = (labels != pad_idx).sum().item()
-            batch_loss = loss.item() * logits.size(0) * logits.size(1)
 
-            total_loss += batch_loss
+            total_loss += loss.item() * non_pad_tokens
             total_tokens += non_pad_tokens
 
             if compute_metrics:
                 generated = greedy_decode(
-                    model,
-                    src_ids,
-                    src_mask,
-                    max_decode_len,
-                    tgt_vocab,
-                    device,
-                    pad_idx=pad_idx,
+                    model=model,
+                    src=src_ids,
+                    src_mask=src_mask,
+                    max_len=max_decode_len,
+                    device=device,
                     sos_idx=sos_idx,
                     eos_idx=eos_idx,
                 )
 
                 for i in range(src_ids.size(0)):
-                    ref_tokens = tokens_to_words(labels[i], tgt_vocab, pad_idx=pad_idx)
-                    hyp_tokens = tokens_to_words(
-                        generated[i], tgt_vocab, pad_idx=pad_idx
+                    ref_ids = clean_ids(labels[i].tolist(), pad_idx, sos_idx, eos_idx)
+                    hyp_ids = clean_ids(
+                        generated[i].tolist(), pad_idx, sos_idx, eos_idx
                     )
 
-                    all_references.append(ref_tokens)
-                    all_hypotheses.append(hyp_tokens)
+                    all_references.append(ref_ids)
+                    all_hypotheses.append(hyp_ids)
 
     avg_loss = total_loss / total_tokens if total_tokens > 0 else 0.0
 
@@ -501,10 +532,10 @@ def get_dataloaders_distributed(config, world_size):
 
     bundle = DatasetBundle(
         train_loader=train_loader,
-        valid_loader=test_loader,
-        test_loader=test_loader,
+        valid_loader=train_loader,
+        test_loader=train_loader,
         train_sampler=train_sampler,
-        test_sampler=test_sampler,
+        test_sampler=train_sampler,
         src_vocab=src_vocab,
         label_vocab=label_vocab,
     )
@@ -596,7 +627,7 @@ def train(cfg, rank, world_size, local_rank):
             world_size=world_size,
         )
 
-        scheduler.step(val_results["loss"])
+        # scheduler.step(val_results["loss"])
 
         if is_main_process(rank):
             print(f"\nTrain Loss: {train_loss:.4f}")
@@ -744,7 +775,7 @@ def main():
             "url": "https://object.pouta.csc.fi/Tatoeba-Challenge-v2023-09-26/eng-nep.tar",
             "data_dir": "../dataset/dataset_tatoeba_eng_nep/",
             "vocab_size": 10000,
-            "sequence_length": 128,
+            "sequence_length": 80,
             "max_samples": 1000000,
         },
         "model": {
@@ -754,9 +785,9 @@ def main():
             "d_ff": 1024,
         },
         "train": {
-            "batch_size": 128,
+            "batch_size": 16,
             "num_epochs": 50,
-            "learning_rate": 5e-4,
+            "learning_rate": 1e-3,
             "checkpoint_dir": "checkpoint",
             "save_every": 5,
         },

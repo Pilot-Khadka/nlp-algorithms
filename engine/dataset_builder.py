@@ -57,15 +57,24 @@ def _is_trained(tokenizer) -> bool:
 
 def _collect_corpus(dataset, key: str) -> str:
     texts: List[str] = []
-    texts = []
-    for item in dataset:
+
+    try:
+        total = len(dataset)
+    except TypeError:
+        total = None
+
+    iterator = tqdm(dataset, total=total, desc=f"Collecting '{key}' corpus")
+
+    for item in iterator:
         val = item[key]
+
         if isinstance(val, str):
             texts.append(val)
         elif isinstance(val, list):
             texts.extend(val)
         else:
             raise ValueError(f"Unsupported type for key '{key}': {type(val)}")
+
     return "\n".join(texts)
 
 
@@ -97,10 +106,7 @@ def build_vocab_from_key(
 
         if os.path.exists(save_path):
             print(f"Loading saved tokenizer from: {save_path}")
-            with open(save_path, "rb") as f:
-                state = pickle.load(f)
-            tokenizer.vocab = state["vocab"]
-            tokenizer.merges = state["merges"]
+            tokenizer.load(save_path)
 
         elif not _is_trained(tokenizer):
             print(f"Training tokenizer on '{key}' corpus...")
@@ -110,12 +116,7 @@ def build_vocab_from_key(
             gc.collect()
 
             print(f"Saving tokenizer to: {save_path}")
-            with open(save_path, "wb") as f:
-                pickle.dump(
-                    {"vocab": tokenizer.vocab, "merges": tokenizer.merges},
-                    f,
-                    protocol=pickle.HIGHEST_PROTOCOL,
-                )
+            tokenizer.save(path=save_path)
 
         else:
             print(f"Using pre-trained tokenizer vocab for '{key}'")
@@ -124,7 +125,7 @@ def build_vocab_from_key(
         next_id = len(special_tokens)
 
         if hasattr(tokenizer, "vocab"):
-            for token in tokenizer.vocab.keys():
+            for token in tokenizer.vocab:
                 if token not in token_to_id:
                     token_to_id[token] = next_id
                     next_id += 1

@@ -9,6 +9,9 @@ dataset/dataset_*
 backup
 *.txt
 *.json
+checkpoint*
+core_lemmatization/wordnet_data*
+core_vectorization/word2vec*
 
 
 

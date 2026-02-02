@@ -54,25 +54,29 @@ class MultiHeadCrossAttention(nn.Module):
 
     def forward(self, decoder_out, encoder_out, mask=None):
         B, dec_len, D = decoder_out.shape
-        enc_len = encoder_out.size(1)
+        enc_len = encoder_out.shape[1]
 
-        q = self.w_q(decoder_out)
-        kv = self.w_kv(encoder_out)
+        # Q
+        q = self.w_q(decoder_out).reshape(B, dec_len, self.num_heads, self.d_k)
+        q = q.transpose(1, 2)  # (B, H, dec_len, d_k)
 
-        q = q.view(B, dec_len, self.num_heads, self.d_k).transpose(1, 2)
-
-        kv = kv.view(B, enc_len, 2, self.num_heads, self.d_k)
-        kv = kv.permute(2, 0, 3, 1, 4)
+        # K, V
+        kv = self.w_kv(encoder_out).reshape(B, enc_len, 2, self.num_heads, self.d_k)
+        kv = kv.permute(2, 0, 3, 1, 4)  # (2, B, H, enc_len, d_k)
         k, v = kv[0], kv[1]
 
+        # Attention
         attn = (q @ k.transpose(-2, -1)) * self.scale
-        if mask is not None:
-            attn = attn + mask
 
-        attn = attn.softmax(dim=-1)
+        if mask is not None:
+            # Expect mask shape: (B, 1, dec_len, enc_len)
+            attn = attn.masked_fill(mask == 0, float("-inf"))
+
+        attn = torch.softmax(attn, dim=-1)
         out = attn @ v
 
-        out = out.permute(0, 2, 1, 3).reshape(B, dec_len, D)
+        # Merge heads
+        out = out.transpose(1, 2).reshape(B, dec_len, D)
         return self.w_o(out)
 
 
@@ -80,30 +84,31 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, d_model, num_heads):
         super().__init__()
         assert d_model % num_heads == 0
+
         self.num_heads = num_heads
         self.d_k = d_model // num_heads
+        self.scale = self.d_k**-0.5
 
         self.w_qkv = nn.Linear(d_model, 3 * d_model, bias=False)
         self.w_o = nn.Linear(d_model, d_model, bias=False)
-        self.scale = self.d_k**-0.5
 
     def forward(self, x, mask=None):
         B, S, D = x.shape
 
-        qkv = self.w_qkv(x)
-        qkv = qkv.view(B, S, 3, self.num_heads, self.d_k)
-        qkv = qkv.permute(2, 0, 3, 1, 4)
-
+        qkv = self.w_qkv(x).reshape(B, S, 3, self.num_heads, self.d_k)
+        qkv = qkv.permute(2, 0, 3, 1, 4)  # (3, B, H, S, d_k)
         q, k, v = qkv[0], qkv[1], qkv[2]
 
         attn = (q @ k.transpose(-2, -1)) * self.scale
-        if mask is not None:
-            attn = attn + mask
 
-        attn = attn.softmax(dim=-1)
+        if mask is not None:
+            # Expect mask shape: (B, 1, S, S)
+            attn = attn.masked_fill(mask == 0, float("-inf"))
+
+        attn = torch.softmax(attn, dim=-1)
         out = attn @ v
 
-        out = out.permute(0, 2, 1, 3).reshape(B, S, D)
+        out = out.transpose(1, 2).reshape(B, S, D)
         return self.w_o(out)
 
 
