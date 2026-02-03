@@ -15,7 +15,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 
 from trans_encoder_decoder import Seq2Seq
-from util.util import convert_to_attrdict, get_num_workers
+from util.util import get_num_workers
 from engine.dataset_builder import build_vocab_from_key
 from infra.preprocessor import PreprocessedDataset
 from engine.registry import (
@@ -25,7 +25,6 @@ from engine.registry import (
     TOKENIZER_REGISTRY,
     get_from_registry,
 )
-from dataset.downloader import TatoebaDownloader
 
 
 class DatasetBundle:
@@ -427,16 +426,21 @@ def get_dataloaders_distributed(config, world_size):
     data_downloader_cls = get_from_registry(DOWNLOADER_REGISTRY, config.dataset.name)
     data_dir = data_downloader_cls().download_and_prepare(config)
 
-    data_reader_cls = get_from_registry(DATA_READER_REGISTRY, config.dataset.name)
+    if config.dataset.name == "huggingface":
+        data_reader_cls = get_from_registry(DATA_READER_REGISTRY, config.dataset.name2)
+    else:
+        data_reader_cls = get_from_registry(DATA_READER_REGISTRY, config.dataset.name)
+
+    max_samples = config.dataset.get("max_samples", None)
     train = data_reader_cls(
         data_dir=data_dir,
         split="train",
-        max_samples=config.dataset.max_samples,
+        max_samples=max_samples,
     )
     test = data_reader_cls(
         data_dir=data_dir,
         split="test",
-        max_samples=config.dataset.max_samples,
+        max_samples=max_samples,
     )
 
     tokenizer_src = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
@@ -532,8 +536,8 @@ def get_dataloaders_distributed(config, world_size):
 
     bundle = DatasetBundle(
         train_loader=train_loader,
-        valid_loader=train_loader,
-        test_loader=train_loader,
+        valid_loader=test_loader,
+        test_loader=test_loader,
         train_sampler=train_sampler,
         test_sampler=train_sampler,
         src_vocab=src_vocab,
@@ -766,58 +770,3 @@ def train(cfg, rank, world_size, local_rank):
             json.dump(test_results, f, indent=2)
 
     return model, train_history, test_results
-
-
-def main():
-    cfg = {
-        "dataset": {
-            "name": "tatoeba",
-            "url": "https://object.pouta.csc.fi/Tatoeba-Challenge-v2023-09-26/eng-nep.tar",
-            "data_dir": "../dataset/dataset_tatoeba_eng_nep/",
-            "vocab_size": 10000,
-            "sequence_length": 80,
-            "max_samples": 1000000,
-        },
-        "model": {
-            "d_model": 256,
-            "num_layers": 3,
-            "num_heads": 4,
-            "d_ff": 1024,
-        },
-        "train": {
-            "batch_size": 16,
-            "num_epochs": 50,
-            "learning_rate": 1e-3,
-            "checkpoint_dir": "checkpoint",
-            "save_every": 5,
-        },
-        "tokenizer": {"name": "bpe"},
-        "task": {"name": "translation"},
-    }
-    cfg = convert_to_attrdict(cfg)
-
-    print("\n=== Downloading Dataset ===")
-    TatoebaDownloader.download_and_prepare(cfg)
-    print("Dataset ready!\n")
-
-    rank, world_size, local_rank = setup_distributed()
-
-    if is_main_process(rank):
-        print("Configuration:")
-        print(json.dumps(cfg, indent=2))
-
-    model, history, test_results = train(cfg, rank, world_size, local_rank)
-
-    if is_main_process(rank):
-        print("\n" + "=" * 60)
-        print("Training completed!")
-        print("=" * 60)
-
-        if "bleu" in test_results:
-            print(f"Final Test BLEU: {test_results['bleu']:.2f}")
-
-    cleanup_distributed()
-
-
-if __name__ == "__main__":
-    main()

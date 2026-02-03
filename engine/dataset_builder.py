@@ -63,9 +63,10 @@ def _collect_corpus(dataset, key: str) -> str:
     except TypeError:
         total = None
 
-    iterator = tqdm(dataset, total=total, desc=f"Collecting '{key}' corpus")
+    iterator = tqdm(range(len(dataset)), total=total, desc=f"Collecting '{key}' corpus")
 
-    for item in iterator:
+    for i in iterator:
+        item = dataset[i]
         val = item[key]
 
         if isinstance(val, str):

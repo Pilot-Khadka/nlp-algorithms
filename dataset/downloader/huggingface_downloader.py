@@ -34,7 +34,7 @@ class HuggingFaceDatasetDownloader:
             return
 
         try:
-            login(token=token, add_to_git_credential=True)
+            login(token=token)
             user = whoami()
             print(f"[HF Login] Logged in as: {user.get('name')}")
         except Exception as e:

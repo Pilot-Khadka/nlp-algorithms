@@ -92,3 +92,7 @@ class PreprocessedDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         return self.examples[index]
+
+    def __iter__(self):
+        for i in range(len(self.examples)):
+            yield self.examples[i]

@@ -3,6 +3,8 @@ github link:https://github.com/sharad461/nepali-translator?tab=readme-ov-file ht
 benchmark: https://lt4all.elra.info/proceedings/lt4all2019/pdf/2019.lt4all-1.94.pdf
 """
 
+from typing import Optional
+
 import os
 import polars as pl
 from torch.utils.data import Dataset
@@ -12,9 +14,10 @@ from engine.registry import register_reader
 
 @register_reader("eng_nep")
 class EngNepDataset(Dataset):
-    def __init__(self, data_dir: str, split: str):
-        self.data_dir = data_dir
+    def __init__(self, data_dir: str, split: str, max_samples: Optional[int] = None):
         self.split = split
+        self.data_dir = data_dir
+        self.max_samples = max_samples
 
         if not os.path.exists(os.path.join(data_dir, ".prepared")):
             raise RuntimeError(
@@ -23,6 +26,10 @@ class EngNepDataset(Dataset):
             )
 
         self.df = self._load_text()
+
+        if self.max_samples is not None:
+            if self.max_samples < len(self.df):
+                self.df = self.df.head(self.max_samples)
 
     def _load_flores_split(self, split_dir: str):
         en_file = None
@@ -82,8 +89,11 @@ class EngNepDataset(Dataset):
 
     def __getitem__(self, index):
         row = self.df.row(index, named=True)
-
         return {"src": row["src"], "tgt": row["tgt"]}
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]
 
 
 if __name__ == "__main__":
@@ -110,6 +120,7 @@ if __name__ == "__main__":
     data_dir = downloader.download_and_prepare(config)
 
     train_dataset = EngNepDataset(data_dir=data_dir, split="train")
+    valid_dataset = EngNepDataset(data_dir=data_dir, split="valid")
     test_dataset = EngNepDataset(data_dir=data_dir, split="test")
 
     sample = train_dataset[0]
@@ -123,3 +134,9 @@ if __name__ == "__main__":
     print("raw text:", sample["src"])
     print("target text:", sample["tgt"])
     print(f"Dataset size: {len(test_dataset)} text")
+
+    sample = valid_dataset[0]
+
+    print("raw text:", sample["src"])
+    print("target text:", sample["tgt"])
+    print(f"Dataset size: {len(valid_dataset)} text")
