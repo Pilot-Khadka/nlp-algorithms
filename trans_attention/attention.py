@@ -1,6 +1,6 @@
-import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class AdditiveAttention(nn.Module):
@@ -39,85 +39,185 @@ class AdditiveAttention(nn.Module):
         return context, attn_weights
 
 
-class MultiHeadCrossAttention(nn.Module):
-    def __init__(self, d_model, num_heads):
-        super().__init__()
-        assert d_model % num_heads == 0
-
-        self.num_heads = num_heads
-        self.d_k = d_model // num_heads
-        self.scale = self.d_k**-0.5
-
-        self.w_q = nn.Linear(d_model, d_model, bias=False)
-        self.w_kv = nn.Linear(d_model, 2 * d_model, bias=False)
-        self.w_o = nn.Linear(d_model, d_model, bias=False)
-
-    def forward(self, decoder_out, encoder_out, mask=None):
-        B, dec_len, D = decoder_out.shape
-        enc_len = encoder_out.shape[1]
-
-        # Q
-        q = self.w_q(decoder_out).reshape(B, dec_len, self.num_heads, self.d_k)
-        q = q.transpose(1, 2)  # (B, H, dec_len, d_k)
-
-        # K, V
-        kv = self.w_kv(encoder_out).reshape(B, enc_len, 2, self.num_heads, self.d_k)
-        kv = kv.permute(2, 0, 3, 1, 4)  # (2, B, H, enc_len, d_k)
-        k, v = kv[0], kv[1]
-
-        # Attention
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-
-        if mask is not None:
-            # Expect mask shape: (B, 1, dec_len, enc_len)
-            attn = attn.masked_fill(mask == 0, float("-inf"))
-
-        attn = torch.softmax(attn, dim=-1)
-        out = attn @ v
-
-        # Merge heads
-        out = out.transpose(1, 2).reshape(B, dec_len, D)
-        return self.w_o(out)
-
-
 class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model, num_heads):
+    def __init__(self, d_model: int, num_heads: int):
         super().__init__()
-        assert d_model % num_heads == 0
+        assert d_model % num_heads == 0, "d_model must split evenly"
 
         self.num_heads = num_heads
-        self.d_k = d_model // num_heads
-        self.scale = self.d_k**-0.5
+        self.head_dim = d_model // num_heads
+        self.scale = self.head_dim**-0.5
 
-        self.w_qkv = nn.Linear(d_model, 3 * d_model, bias=False)
-        self.w_o = nn.Linear(d_model, d_model, bias=False)
+        self.q_proj = nn.Linear(d_model, d_model)
+        self.k_proj = nn.Linear(d_model, d_model)
+        self.v_proj = nn.Linear(d_model, d_model)
 
-    def forward(self, x, mask=None):
-        B, S, D = x.shape
+        self.out_proj = nn.Linear(d_model, d_model)
 
-        qkv = self.w_qkv(x).reshape(B, S, 3, self.num_heads, self.d_k)
-        qkv = qkv.permute(2, 0, 3, 1, 4)  # (3, B, H, S, d_k)
-        q, k, v = qkv[0], qkv[1], qkv[2]
+    def _shape(self, x, B, S):
+        # (B, S, D) --> (B, num_heads, S, head_dim)
+        return x.view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
 
-        attn = (q @ k.transpose(-2, -1)) * self.scale
+    def forward(
+        self,
+        hidden_states,  # (B, tgt_len, d_model)
+        key_value_states=None,
+        attention_mask=None,
+    ):
+        is_cross = key_value_states is not None
 
-        if mask is not None:
-            # Expect mask shape: (B, 1, S, S)
-            attn = attn.masked_fill(mask == 0, float("-inf"))
+        B, tgt_len, _ = hidden_states.shape
 
-        attn = torch.softmax(attn, dim=-1)
-        out = attn @ v
+        query = self.q_proj(hidden_states)
 
-        out = out.transpose(1, 2).reshape(B, S, D)
-        return self.w_o(out)
+        if is_cross:
+            key = self.k_proj(key_value_states)
+            value = self.v_proj(key_value_states)
+            src_len = key_value_states.size(1)
+        else:
+            key = self.k_proj(hidden_states)
+            value = self.v_proj(hidden_states)
+            src_len = tgt_len
+
+        # (B, heads, seq_len, head_dim)
+        query = self._shape(query, B, tgt_len)
+        key = self._shape(key, B, src_len)
+        value = self._shape(value, B, src_len)
+
+        attn_weights = torch.matmul(query, key.transpose(-2, -1)) * self.scale
+        # shape: (B, heads, tgt_len, src_len)
+
+        if attention_mask is not None:
+            # masks are additive (0 or -inf)
+            # Must be broadcastable to (B, heads, tgt_len, src_len)
+            attn_weights = attn_weights + attention_mask
+
+        attn_weights = F.softmax(attn_weights, dim=-1)
+
+        attn_output = torch.matmul(attn_weights, value)
+        # (B, heads, tgt_len, head_dim)
+
+        # merge heads
+        attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.view(B, tgt_len, -1)
+
+        return self.out_proj(attn_output)
+
+
+def make_padding_mask(seq, pad_idx=0):
+    """
+    seq: (B,S)
+    output: (B,1,1,S)
+    """
+    return (seq != pad_idx).unsqueeze(1).unsqueeze(2)
+
+
+def make_causal_mask(T):
+    """
+    output: (1, 1, T, T)
+    """
+    return torch.triu(torch.ones(T, T), diagonal=1).bool().unsqueeze(0).unsqueeze(0)
+
+
+def convert_to_additive(mask_bool):
+    """
+    boolean mask -> additive mask
+    True = keep (0)
+    False = mask (-inf)
+    """
+    return mask_bool.masked_fill(~mask_bool, float("-inf")).float()
+
+
+def test_self_attention_no_mask():
+    print("TEST: Self-attention no mask")
+    batch_size, seq_len, dim = 16, 10, 64
+    num_heads = 8
+    x = torch.randn(batch_size, seq_len, dim)
+    mha = MultiHeadAttention(d_model=dim, num_heads=num_heads)
+
+    out = mha(x)
+    assert out.shape == (batch_size, seq_len, dim)
+    assert not torch.isnan(out).any()
+    print(" OK!")
+
+
+def test_self_attention_padding_mask():
+    print("TEST: Self-attention padding mask")
+    B, T, D = 3, 12, 32
+    x = torch.randn(B, T, D)
+    seq = torch.tensor([[1, 2, 3, 0, 0, 0], [4, 5, 0, 0, 0, 0], [7, 8, 9, 10, 11, 12]])
+    seq = F.pad(seq, (0, T - seq.size(1)), value=0)
+
+    padding_mask = convert_to_additive(make_padding_mask(seq))
+
+    mha = MultiHeadAttention(D, 4)
+    out = mha(x, attention_mask=padding_mask)
+
+    assert out.shape == (B, T, D)
+    assert not torch.isnan(out).any()
+    print(" OK!")
+
+
+def test_self_attention_causal_mask():
+    print("TEST: Self-attention causal mask")
+    B, T, D = 2, 6, 16
+    x = torch.randn(B, T, D)
+
+    causal_mask = convert_to_additive(~make_causal_mask(T))
+
+    mha = MultiHeadAttention(D, 4)
+    out = mha(x, attention_mask=causal_mask)
+
+    assert out.shape == (B, T, D)
+    print(" OK!")
+
+
+def test_combined_causal_padding_mask():
+    print("TEST: Combined causal + padding")
+    B, T, D = 2, 8, 32
+
+    x = torch.randn(B, T, D)
+    # shape:(2,8)
+    seq = torch.tensor([[1, 2, 3, 4, 0, 0, 0, 0], [9, 8, 7, 6, 5, 4, 0, 0]])
+
+    # shape:(2,1,1,8)
+    padding = make_padding_mask(seq)
+    # shape:(1,1,8,8)
+    causal = ~make_causal_mask(T)  # True = keep
+    # shape:(2,1,8,8)
+    combined = convert_to_additive(padding & causal)
+
+    mha = MultiHeadAttention(D, 4)
+    out = mha(x, attention_mask=combined)
+
+    assert out.shape == (B, T, D)
+    print(" OK!")
+
+
+def test_cross_attention_padding_mask():
+    print("TEST: Cross-attention padding mask")
+    B, S, T, D = 2, 12, 6, 32
+
+    src = torch.randn(B, S, D)
+    tgt = torch.randn(B, T, D)
+
+    # shape:(2,12)
+    src_tokens = torch.tensor(
+        [[1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0], [4, 5, 6, 7, 8, 9, 0, 0, 0, 0, 0, 0]]
+    )
+
+    # shape:(2,1,1,12)
+    padding_mask = convert_to_additive(make_padding_mask(src_tokens))  # (B,1,1,S)
+
+    mha = MultiHeadAttention(D, 4)
+    out = mha(tgt, key_value_states=src, attention_mask=padding_mask)
+    assert out.shape == (B, T, D)
+    print(" OK!")
 
 
 if __name__ == "__main__":
-    model_dim = 512
-    batch_size = 8
-    sequence_length = 10
-
-    x = torch.randn(batch_size, sequence_length, model_dim)
-
-    attention = MultiHeadAttention(d_model=model_dim, num_heads=8)
-    out = attention(x)
+    test_self_attention_no_mask()
+    test_self_attention_padding_mask()
+    test_self_attention_causal_mask()
+    test_combined_causal_padding_mask()
+    test_cross_attention_padding_mask()

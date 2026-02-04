@@ -14,6 +14,11 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 
+from trans_attention.attention import (
+    convert_to_additive,
+    make_causal_mask,
+    make_padding_mask,
+)
 from trans_encoder_decoder import Seq2Seq
 from util.util import get_num_workers
 from engine.dataset_builder import build_vocab_from_key
@@ -48,14 +53,9 @@ class DatasetBundle:
 
 
 def setup_distributed():
-    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
-        rank = int(os.environ["RANK"])
-        world_size = int(os.environ["WORLD_SIZE"])
-        local_rank = int(os.environ["LOCAL_RANK"])
-    else:
-        rank = 0
-        world_size = 1
-        local_rank = 0
+    rank = int(os.environ.get("RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
 
     if world_size > 1:
         dist.init_process_group(backend="nccl")
@@ -73,32 +73,24 @@ def is_main_process(rank):
     return rank == 0
 
 
-def create_masks(src, tgt, pad_idx=0):
+def create_masks(src, tgt, pad_idx):
     """
-    boolean mask
-    src mask shape: (batch, 1, 1, sequence_length)
-    tgt mask shape: (batch, 1, T, T)
+    description:
+        encoder self-attention: padding mask only (src)
+        decoder self-attention: causal+padding mask (tgt)
+        cross-attention: padding mask for encoder source tokens (src)
+
+    outputs:
+        src padding mask, tgt combined mask
+
     """
-    B, T = tgt.size()
+    B, T = tgt.shape
+    src_padding_mask = make_padding_mask(seq=src, pad_idx=pad_idx).to(tgt.device)
+    tgt_padding_mask = make_padding_mask(seq=tgt, pad_idx=pad_idx).to(tgt.device)
+    causal_mask = (~make_causal_mask(T)).to(tgt.device)  # True = keep
 
-    # boolean mask
-    src_mask = (src != pad_idx).unsqueeze(1).unsqueeze(2)
-
-    # padding mask: (B, 1, 1, T)
-    # boolean mask
-    tgt_padding = (tgt != pad_idx).unsqueeze(1).unsqueeze(1)
-
-    # causal mask: (1, 1, T, T)
-    causal = (
-        torch.tril(torch.ones((T, T), device=tgt.device))
-        .bool()
-        .unsqueeze(0)
-        .unsqueeze(0)
-    )
-
-    # final shape: (B, 1, T, T)
-    tgt_mask = tgt_padding & causal
-    return src_mask, tgt_mask
+    tgt_combined_mask = convert_to_additive(tgt_padding_mask & causal_mask)
+    return src_padding_mask, tgt_combined_mask
 
 
 def calculate_bleu(references, hypotheses, max_n=4):
@@ -277,6 +269,36 @@ def train_epoch(
             )
             raise ValueError("Label out of range")
 
+        if torch.isnan(logits).any():
+            print("NAN in logits!")
+            print("\n===== NAN DETECTED =====")
+            print("src_ids:", src_ids)
+            print("tgt_ids:", tgt_ids)
+            print("labels:", labels)
+            print(
+                "logits stats:",
+                torch.isnan(logits).any().item(),
+                logits.min().item(),
+                logits.max().item(),
+            )
+            print("tgt_ids unique:", torch.unique(tgt_ids))
+            print("labels unique:", torch.unique(labels))
+            print("Batch index:", num_batches)
+
+            for i in range(src_ids.size(0)):
+                print("---- SAMPLE", i, "----")
+                print("src:", src_ids[i])
+                print("tgt:", tgt_ids[i])
+                print("label:", labels[i])
+            raise RuntimeError()
+
+        if torch.isinf(logits).any():
+            print("INF in logits!")
+            raise RuntimeError()
+
+        if logits.abs().max() > 50:
+            print("WARNING: Exploding logits:", logits.abs().max().item())
+
         loss = criterion(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
 
         non_pad_tokens = (labels != pad_idx).sum().item()
@@ -422,6 +444,19 @@ def evaluate(
     return results
 
 
+def init_tokenizer(tokenizer_name, config):
+    tokenizer_cls = get_from_registry(TOKENIZER_REGISTRY, tokenizer_name)
+    tokenizer_kwargs = {}
+    sig = inspect.signature(tokenizer_cls.__init__)
+
+    if "vocab_size" in sig.parameters:
+        tokenizer_kwargs["vocab_size"] = getattr(
+            config.tokenizer, "vocab_size", config.dataset.vocab_size
+        )
+
+    return tokenizer_cls(**tokenizer_kwargs)
+
+
 def get_dataloaders_distributed(config, world_size):
     data_downloader_cls = get_from_registry(DOWNLOADER_REGISTRY, config.dataset.name)
     data_dir = data_downloader_cls().download_and_prepare(config)
@@ -443,31 +478,8 @@ def get_dataloaders_distributed(config, world_size):
         max_samples=max_samples,
     )
 
-    tokenizer_src = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
-
-    tokenizer_kwargs = {}
-    sig = inspect.signature(tokenizer_src.__init__)
-
-    if "vocab_size" in sig.parameters:
-        bpe_vocab_size = getattr(
-            config.tokenizer, "vocab_size", config.dataset.vocab_size
-        )
-        tokenizer_kwargs["vocab_size"] = bpe_vocab_size
-
-    tokenizer_src = tokenizer_src(**tokenizer_kwargs)
-
-    tokenizer_tgt = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
-
-    tokenizer_kwargs = {}
-    sig = inspect.signature(tokenizer_tgt.__init__)
-
-    if "vocab_size" in sig.parameters:
-        bpe_vocab_size = getattr(
-            config.tokenizer, "vocab_size", config.dataset.vocab_size
-        )
-        tokenizer_kwargs["vocab_size"] = bpe_vocab_size
-
-    tokenizer_tgt = tokenizer_tgt(**tokenizer_kwargs)
+    tokenizer_src = init_tokenizer(config.tokenizer.name, config)
+    tokenizer_tgt = init_tokenizer(config.tokenizer.name, config)
 
     src_vocab = build_vocab_from_key(
         dataset=train,
@@ -539,7 +551,7 @@ def get_dataloaders_distributed(config, world_size):
         valid_loader=test_loader,
         test_loader=test_loader,
         train_sampler=train_sampler,
-        test_sampler=train_sampler,
+        test_sampler=test_sampler,
         src_vocab=src_vocab,
         label_vocab=label_vocab,
     )

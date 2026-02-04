@@ -83,7 +83,7 @@ def build_vocab_from_key(
     dataset,
     config,
     key: str,
-    tokenizer=None,
+    tokenizer,
     vocab_size: int = 10000,
     min_freq: int = 1,
     special_tokens=None,

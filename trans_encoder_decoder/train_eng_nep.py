@@ -2,7 +2,7 @@ import json
 
 from util.util import convert_to_attrdict
 
-from trans_encoder_decoder.train_tatoeba import (
+from trans_encoder_decoder.train import (
     setup_distributed,
     is_main_process,
     cleanup_distributed,

@@ -3,7 +3,7 @@ import torch.nn as nn
 
 from engine.registry import register_model
 from net_common.positional_encoding import PositionalEncoding
-from trans_attention.attention import MultiHeadAttention, MultiHeadCrossAttention
+from trans_attention.attention import MultiHeadAttention
 
 
 class FeedForward(nn.Module):
@@ -39,7 +39,9 @@ class EncoderLayer(nn.Module):
         self.ff_block = ResidualBlock(d_model)
 
     def forward(self, x, mask=None):
-        x = self.attn_block(x, lambda x: self.self_attn(x, mask))
+        x = self.attn_block(
+            x, lambda norm_x: self.self_attn(norm_x, attention_mask=mask)
+        )
         x = self.ff_block(x, self.ff)
         return x
 
@@ -69,7 +71,9 @@ class DecoderLayer(nn.Module):
         super().__init__()
 
         self.self_attn = MultiHeadAttention(d_model, num_heads)
-        self.cross_attn = MultiHeadCrossAttention(d_model, num_heads)
+        self.cross_attn = MultiHeadAttention(
+            d_model, num_heads
+        )  # cross attn handled internally
         self.ff = FeedForward(d_model, d_ff)
 
         self.self_attn_block = ResidualBlock(d_model)
@@ -78,11 +82,18 @@ class DecoderLayer(nn.Module):
 
     def forward(self, x, encoder_out, src_mask=None, tgt_mask=None):
         # maksed self-attention
-        x = self.self_attn_block(x, lambda x: self.self_attn(x, tgt_mask))
+        x = self.self_attn_block(
+            x, lambda norm_x: self.self_attn(norm_x, attention_mask=tgt_mask)
+        )
 
-        # encoder–decoder attention
+        # cross-attention
         x = self.cross_attn_block(
-            x, lambda x: self.cross_attn(x, encoder_out, src_mask)
+            x,
+            lambda norm_x: self.cross_attn(
+                norm_x,
+                key_value_states=encoder_out,
+                attention_mask=src_mask,
+            ),
         )
 
         x = self.ff_block(x, self.ff)
