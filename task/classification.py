@@ -9,7 +9,7 @@ class ClassificationTask(BaseTask):
 
     @staticmethod
     def get_output_dim(dataset_bundle):
-        return len(dataset_bundle.label_vocab)
+        return len(dataset_bundle.vocab)
 
     @staticmethod
     def get_loss():

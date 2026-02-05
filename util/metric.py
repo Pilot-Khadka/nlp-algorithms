@@ -99,12 +99,6 @@ def ppl_to_loss_ratio(outputs, targets, computed_metrics=None):
 def accuracy(context: MetricContext) -> float:
     predictions = context.get("predictions")
     targets = context.get("targets")
-    assert targets is not None
-
-    if predictions is None:
-        # if predictions not pre-computed, get from outputs
-        outputs = context["outputs"]
-        predictions = torch.argmax(outputs, dim=1)
 
     correct = (predictions == targets).sum().item()
     total = targets.size(0)
@@ -116,13 +110,6 @@ def precision(context: MetricContext) -> float:
 
     predictions = context.get("predictions")
     targets = context.get("targets")
-    # print(f"Total Samples: {targets.size(0)}")
-    # print(f"Predicted as Positive (1): {(predictions == 1).sum().item()}")
-    # print(f"Actually Positive (1): {(targets == 1).sum().item()}")
-
-    if predictions is None:
-        outputs = context["outputs"]
-        predictions = torch.argmax(outputs, dim=1)
 
     classes = torch.unique(targets)
     precisions = []
@@ -141,10 +128,6 @@ def recall(context: MetricContext) -> float:
     """macro-aveeraged"""
     predictions = context.get("predictions")
     targets = context.get("targets")
-
-    if predictions is None:
-        outputs = context["outputs"]
-        predictions = torch.argmax(outputs, dim=1)
 
     classes = torch.unique(targets)
     recalls = []

@@ -1,6 +1,7 @@
 dataset:
   name: imdb
   sequence_length: 256
+  vocab_size: 10000
   data_dir: dataset/dataset_imdb/
   url: "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
   archive_name: aclImdb_v1.tar.gz
@@ -11,17 +12,21 @@ dataset:
   prefetch_factor: 2
 
 
+tokenizer:
+  # name: whitespace
+  name: bpe
+  
 model:
   name: lstm
   input_dim: 128
   hidden_dim: 256
-  num_layers: 1
-  dropout: 0.5
+  num_layers: 2
+  dropout: 0.3
   bidirectional: false
   weight_tying: false
 
 task:
-  name: sentiment_analysis
+  name: classification 
   metrics:
     - accuracy
     - f1_score

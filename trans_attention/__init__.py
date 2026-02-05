@@ -1,1 +1,1 @@
-from .attention import AdditiveAttention, MultiHeadAttention, MultiHeadCrossAttention
+from .attention import AdditiveAttention, MultiHeadAttention

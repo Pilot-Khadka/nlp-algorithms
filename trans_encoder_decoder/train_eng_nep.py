@@ -2,15 +2,15 @@ import json
 
 from util.util import convert_to_attrdict
 
-from trans_encoder_decoder.train import (
-    setup_distributed,
-    is_main_process,
-    cleanup_distributed,
-    train,
-)
-
 
 def main():
+    from trans_encoder_decoder.train import (
+        setup_distributed,
+        is_main_process,
+        cleanup_distributed,
+        train,
+    )
+
     cfg = {
         "dataset": {
             "name": "huggingface",
@@ -28,6 +28,7 @@ def main():
             ],
             "vocab_size": 10000,
             "sequence_length": 80,
+            "max_samples": 1000,
         },
         "model": {
             "d_model": 256,

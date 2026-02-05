@@ -114,18 +114,22 @@ def make_padding_mask(seq, pad_idx=0):
 
 def make_causal_mask(T):
     """
-    output: (1, 1, T, T)
+    True = keep, False = mask
+    shape: (1,1,T,T)
     """
-    return torch.triu(torch.ones(T, T), diagonal=1).bool().unsqueeze(0).unsqueeze(0)
+
+    # lower-triangular keep mask
+    mask = torch.tril(torch.ones(T, T), diagonal=0).bool()
+    return mask.unsqueeze(0).unsqueeze(0)
 
 
 def convert_to_additive(mask_bool):
     """
     boolean mask -> additive mask
-    True = keep (0)
+    True = keep (0.0)
     False = mask (-inf)
     """
-    return mask_bool.masked_fill(~mask_bool, float("-inf")).float()
+    return torch.zeros_like(mask_bool, dtype=torch.float).masked_fill(~mask_bool, -1e9)
 
 
 def test_self_attention_no_mask():

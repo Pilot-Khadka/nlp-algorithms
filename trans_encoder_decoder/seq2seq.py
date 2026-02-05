@@ -40,7 +40,12 @@ class EncoderLayer(nn.Module):
 
     def forward(self, x, mask=None):
         x = self.attn_block(
-            x, lambda norm_x: self.self_attn(norm_x, attention_mask=mask)
+            x,
+            lambda norm_x: self.self_attn(
+                norm_x,
+                key_value_states=None,
+                attention_mask=mask,
+            ),
         )
         x = self.ff_block(x, self.ff)
         return x
@@ -83,7 +88,12 @@ class DecoderLayer(nn.Module):
     def forward(self, x, encoder_out, src_mask=None, tgt_mask=None):
         # maksed self-attention
         x = self.self_attn_block(
-            x, lambda norm_x: self.self_attn(norm_x, attention_mask=tgt_mask)
+            x,
+            lambda norm_x: self.self_attn(
+                norm_x,
+                key_value_states=None,
+                attention_mask=tgt_mask,
+            ),
         )
 
         # cross-attention
@@ -136,7 +146,6 @@ class Seq2Seq(nn.Module):
         super().__init__()
 
         self.encoder = Encoder(source_vocab_size, d_model, num_layers, num_heads, d_ff)
-
         self.decoder = Decoder(target_vocab_size, d_model, num_layers, num_heads, d_ff)
 
     def forward(self, src, tgt, src_mask=None, tgt_mask=None):

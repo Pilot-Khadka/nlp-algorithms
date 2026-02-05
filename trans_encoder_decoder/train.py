@@ -1,9 +1,9 @@
 import os
 import json
-import math
 import inspect
 from tqdm import tqdm
-from collections import Counter
+
+import sacrebleu
 
 import torch
 import torch.nn as nn
@@ -85,77 +85,30 @@ def create_masks(src, tgt, pad_idx):
 
     """
     B, T = tgt.shape
-    src_padding_mask = make_padding_mask(seq=src, pad_idx=pad_idx).to(tgt.device)
-    tgt_padding_mask = make_padding_mask(seq=tgt, pad_idx=pad_idx).to(tgt.device)
-    causal_mask = (~make_causal_mask(T)).to(tgt.device)  # True = keep
+    src_pad = make_padding_mask(seq=src, pad_idx=pad_idx).to(tgt.device)
+    tgt_pad = make_padding_mask(seq=tgt, pad_idx=pad_idx).to(tgt.device)
+    causal_mask = make_causal_mask(T).to(tgt.device)  # True = keep
 
-    tgt_combined_mask = convert_to_additive(tgt_padding_mask & causal_mask)
+    src_padding_mask = convert_to_additive(src_pad)
+    tgt_combined_mask = convert_to_additive(tgt_pad & causal_mask)
     return src_padding_mask, tgt_combined_mask
 
 
-def calculate_bleu(references, hypotheses, max_n=4):
-    # references: list[list[str]]
-    # hypotheses: list[list[str]]
-    precisions = []
-    clipped_total = [0] * max_n
-    hyp_total = [0] * max_n
-
-    assert len(references) == len(hypotheses)
-
-    for ref, hyp in zip(references, hypotheses):
-        for n in range(1, max_n + 1):
-            ref_counts = Counter(tuple(ref[i : i + n]) for i in range(len(ref) - n + 1))
-            hyp_counts = Counter(tuple(hyp[i : i + n]) for i in range(len(hyp) - n + 1))
-
-            hyp_total[n - 1] += sum(hyp_counts.values())
-            for ng, count in hyp_counts.items():
-                clipped_total[n - 1] += min(count, ref_counts.get(ng, 0))
-
-    # Modified n-gram precisions
-    for n in range(max_n):
-        if hyp_total[n] == 0:
-            precisions.append(0.0)
-        else:
-            precisions.append(clipped_total[n] / hyp_total[n])
-
-    # Brevity penalty
-    ref_len = sum(len(r) for r in references)
-    hyp_len = sum(len(h) for h in hypotheses)
-
-    if hyp_len == 0:
-        return {
-            "bleu": 0,
-            "bleu-1": 0,
-            "bleu-2": 0,
-            "bleu-3": 0,
-            "bleu-4": 0,
-            "brevity_penalty": 0,
-            "ref_length": 0,
-            "hyp_length": 0,
-        }
-
-    if hyp_len > ref_len:
-        bp = 1.0
-    else:
-        bp = math.exp(1 - ref_len / hyp_len)
-
-    # Geometric mean
-    if min(precisions) > 0:
-        geo = math.exp(sum(math.log(p) for p in precisions) / max_n)
-    else:
-        geo = 0.0
-
-    bleu = bp * geo
+def calculate_bleu(references, hypotheses):
+    bleu = sacrebleu.corpus_bleu(
+        hypotheses=hypotheses,
+        references=[references],
+    )
 
     return {
-        "bleu": bleu * 100,
-        "bleu-1": precisions[0] * 100,
-        "bleu-2": precisions[1] * 100,
-        "bleu-3": precisions[2] * 100,
-        "bleu-4": precisions[3] * 100,
-        "brevity_penalty": bp,
-        "ref_length": ref_len,
-        "hyp_length": hyp_len,
+        "bleu": bleu.score,
+        "bleu-1": bleu.precisions[0],
+        "bleu-2": bleu.precisions[1],
+        "bleu-3": bleu.precisions[2],
+        "bleu-4": bleu.precisions[3],
+        "brevity_penalty": bleu.bp,
+        "hyp_length": bleu.sys_len,
+        "ref_length": bleu.ref_len,
     }
 
 
@@ -411,13 +364,13 @@ def evaluate(
                 )
 
                 for i in range(src_ids.size(0)):
-                    ref_ids = clean_ids(labels[i].tolist(), pad_idx, sos_idx, eos_idx)
-                    hyp_ids = clean_ids(
-                        generated[i].tolist(), pad_idx, sos_idx, eos_idx
+                    hyp_string = tokens_to_words(
+                        token_ids=generated[i], vocab=tgt_vocab
                     )
+                    ref_string = tokens_to_words(token_ids=labels[i], vocab=tgt_vocab)
 
-                    all_references.append(ref_ids)
-                    all_hypotheses.append(hyp_ids)
+                    all_references.append(ref_string)
+                    all_hypotheses.append(hyp_string)
 
     avg_loss = total_loss / total_tokens if total_tokens > 0 else 0.0
 

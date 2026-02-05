@@ -3,7 +3,6 @@ from typing import List
 
 import os
 import gc
-import pickle
 import inspect
 from tqdm import tqdm
 from collections import Counter
@@ -170,12 +169,22 @@ def build_vocab_from_key(
 
 class DatasetBundleBuilder:
     def build(self, config):
+        if not config.dataset.name:
+            raise RuntimeError("config.dataset.name is not defined")
+
+        if not config.tokenizer.name:
+            raise RuntimeError("config.tokenizer.name is not defined")
+
+        if not config.dataset.vocab_size:
+            raise RuntimeError("config.dataset.voacab_size is not defined")
+
         data_downloader_cls = get_from_registry(
             DOWNLOADER_REGISTRY, config.dataset.name
         )
         data_dir = data_downloader_cls().download_and_prepare(config)
 
         data_reader_cls = get_from_registry(DATA_READER_REGISTRY, config.dataset.name)
+
         train = data_reader_cls(data_dir=data_dir, split="train")
         test = data_reader_cls(data_dir=data_dir, split="test")
 
@@ -199,11 +208,11 @@ class DatasetBundleBuilder:
         tgt_vocab = None
 
         if config.task.name in {"classification", "ner"}:
-            label_vocab = build_vocab_from_key(
+            token_vocab = build_vocab_from_key(
                 train,
                 config=config,
-                key="label",
-                tokenizer=None,  # labels are typically already tokens or classes
+                key="text",
+                tokenizer=tokenizer,
                 vocab_size=config.dataset.vocab_size,
             )
         elif config.task.name == "translation":

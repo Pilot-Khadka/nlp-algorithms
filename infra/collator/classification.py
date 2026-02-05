@@ -8,6 +8,12 @@ from infra.collator import BaseCollator
 from engine.registry import register_collator
 
 
+def _to_long_tensor(x):
+    if isinstance(x, torch.Tensor):
+        return x.detach().clone().long()
+    return torch.tensor(x, dtype=torch.long)
+
+
 @register_collator("classification")
 class ClassificationCollator(BaseCollator):
     def __init__(self, vocab, architecture="transformer"):
@@ -34,19 +40,19 @@ class ClassificationCollator(BaseCollator):
         labels = [labels[i] for i in sorted_indices]
         lengths = [lengths[i] for i in sorted_indices]
 
-        sequences = [torch.tensor(x, dtype=torch.long) for x in encoded]
+        sequences = [_to_long_tensor(x) for x in encoded]
         input_ids = pad_sequence(
             sequences, batch_first=True, padding_value=self.vocab.pad_id
         )
 
         return {
             "input_ids": input_ids,
-            "lengths": torch.tensor(lengths, dtype=torch.long),
-            "labels": torch.tensor(labels, dtype=torch.long),
+            "lengths": _to_long_tensor(lengths),
+            "labels": _to_long_tensor(labels),
         }
 
     def _collate_transformer(self, encoded, labels):
-        sequences = [torch.tensor(x, dtype=torch.long) for x in encoded]
+        sequences = [_to_long_tensor(x) for x in encoded]
         input_ids = pad_sequence(
             sequences, batch_first=True, padding_value=self.vocab.pad_id
         )
@@ -56,7 +62,7 @@ class ClassificationCollator(BaseCollator):
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "labels": torch.tensor(labels, dtype=torch.long),
+            "labels": _to_long_tensor(labels),
         }
 
 

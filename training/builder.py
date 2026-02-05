@@ -1,8 +1,5 @@
 from typing import Any, Union, Optional
 
-import os
-import pickle
-import inspect
 from dataclasses import dataclass
 
 import torch
@@ -16,13 +13,12 @@ from infra.preprocessor import PreprocessedDataset
 from engine.registry import (
     TASK_REGISTRY,
     COLLATOR_REGISTRY,
-    TOKENIZER_REGISTRY,
     get_from_registry,
 )
 from engine.model_factory import ModelFactory
 from engine.optimizer import get_optimizer
-from engine.dataset_builder import DatasetBundleBuilder, _is_trainable_tokenizer
-from util.util import get_num_workers, resolve_tokenizer_path
+from engine.dataset_builder import DatasetBundleBuilder
+from util.util import get_num_workers
 
 ModelLike = Union[torch.nn.Module, DataParallel, DistributedDataParallel]
 SchedulerLike = Optional[Union[_LRScheduler, ReduceLROnPlateau]]

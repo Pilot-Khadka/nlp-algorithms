@@ -213,9 +213,9 @@ class LanguageModelingTask(BaseTrainer):
 
                 # invariant of sequence length
                 all_logits.append(
-                    logits.view(-1, logits.size(-1)).detach()
+                    logits.view(-1, logits.size(-1)).detach().cpu()
                 )  # (batch*seq, vocab)
-                all_targets.append(targets.view(-1).detach())  # (batch*seq,)
+                all_targets.append(targets.view(-1).detach().cpu())  # (batch*seq,)
 
                 if self.is_main and hasattr(valid_progress, "set_postfix"):
                     current_metrics = self.metrics_tracker.get_averages()

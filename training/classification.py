@@ -145,9 +145,9 @@ class ClassificationTrainer(BaseTrainer):
 
                 preds = torch.argmax(logits, dim=1)
 
-                all_logits.append(logits.detach())
-                all_predictions.append(preds.detach())
-                all_targets.append(labels.detach())
+                # all_logits.append(logits.detach().cpu())
+                all_predictions.append(preds.detach().cpu())
+                all_targets.append(labels.detach().cpu())
 
                 if self.is_main and hasattr(valid_progress, "set_postfix"):
                     avg_loss = total_valid_loss / total_samples
@@ -157,7 +157,7 @@ class ClassificationTrainer(BaseTrainer):
                     cast(tqdm, valid_progress).set_postfix_str(short_metrics)
 
         # concatenate per-rank
-        all_logits = torch.cat(all_logits, dim=0)
+        # all_logits = torch.cat(all_logits, dim=0)
         all_predictions = torch.cat(all_predictions, dim=0)
         all_targets = torch.cat(all_targets, dim=0)
 
@@ -175,21 +175,20 @@ class ClassificationTrainer(BaseTrainer):
         if self.use_ddp:
             world_size = dist.get_world_size()
 
-            logits_list = [torch.empty_like(all_logits) for _ in range(world_size)]
+            # logits_list = [torch.empty_like(all_logits) for _ in range(world_size)]
             preds_list = [torch.empty_like(all_predictions) for _ in range(world_size)]
             targets_list = [torch.empty_like(all_targets) for _ in range(world_size)]
 
-            dist.all_gather(logits_list, all_logits)
+            # dist.all_gather(logits_list, all_logits)
             dist.all_gather(preds_list, all_predictions)
             dist.all_gather(targets_list, all_targets)
 
-            all_logits = torch.cat(logits_list, dim=0)
+            # all_logits = torch.cat(logits_list, dim=0)
             all_predictions = torch.cat(preds_list, dim=0)
             all_targets = torch.cat(targets_list, dim=0)
 
         context = {
             "loss": avg_valid_loss,
-            "outputs": all_logits.cpu(),
             "predictions": all_predictions.cpu(),
             "targets": all_targets.cpu(),
         }
