@@ -14,7 +14,6 @@ core_lemmatization/wordnet_data*
 core_vectorization/word2vec*
 
 
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
