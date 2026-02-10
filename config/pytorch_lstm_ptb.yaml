@@ -23,6 +23,7 @@ model:
   dropout: 0.5
   bidirectional: false
   weight_tying: true
+  pytorch: true
 
 train:
   epochs: 15

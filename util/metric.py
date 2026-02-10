@@ -12,6 +12,7 @@ class MetricContext(TypedDict):
     outputs: Tensor
     predictions: Tensor
     targets: Tensor
+    tokens: int
 
 
 class MetricsTracker:
@@ -21,35 +22,61 @@ class MetricsTracker:
 
     def reset(self) -> None:
         self.batch_metrics: List[Dict[str, float]] = []
-        self.accumulated: defaultdict[str, float] = defaultdict(float)
-        self.counts: defaultdict[str, int] = defaultdict(int)
+        self.accumulated = defaultdict(float)
+        self.token_accumulated = 0
 
     def update(self, metrics: Dict[str, float]) -> None:
+        """
+        Expected metrics dict may contain:
+            loss   -> mean loss for this batch
+            tokens -> number of tokens used for this loss
+            anything else -> batch-mean metrics
+        """
+
         self.batch_metrics.append(metrics)
 
+        if "loss" in metrics:
+            if "tokens" not in metrics:
+                raise ValueError(
+                    "MetricsTracker.update requires 'tokens' when 'loss' is provided."
+                )
+
+            loss = metrics["loss"]
+            tokens = metrics["tokens"]
+
+            if isinstance(loss, Tensor):
+                loss = loss.item()
+
+            self.accumulated["loss"] += loss * tokens
+            self.token_accumulated += tokens
+
         for name, value in metrics.items():
-            if isinstance(value, torch.Tensor):
+            if name in ("loss", "tokens"):
+                continue
+
+            if isinstance(value, Tensor):
                 value = value.item()
+
             self.accumulated[name] += value
-            self.counts[name] += 1
+            self.accumulated[name + "_count"] += 1
 
     def get_averages(self) -> Dict[str, float]:
-        if not self.accumulated:
-            return {}
-
         averages = {}
-        for metric_name in self.accumulated:
-            if self.counts[metric_name] > 0:
-                averages[metric_name] = (
-                    self.accumulated[metric_name] / self.counts[metric_name]
-                )
+
+        if self.token_accumulated > 0:
+            averages["loss"] = self.accumulated["loss"] / self.token_accumulated
+
+        for key in list(self.accumulated.keys()):
+            if key.endswith("_count"):
+                name = key.replace("_count", "")
+                count = self.accumulated[key]
+                if count > 0:
+                    averages[name] = self.accumulated[name] / count
 
         return averages
 
     def get_current_batch_metrics(self) -> Dict[str, float]:
-        if not self.batch_metrics:
-            return {}
-        return self.batch_metrics[-1]
+        return self.batch_metrics[-1] if self.batch_metrics else {}
 
     def format_metrics(
         self, metrics: Optional[Dict[str, float]] = None, prefix: str = ""
@@ -60,30 +87,24 @@ class MetricsTracker:
         if not metrics:
             return f"{prefix}No metrics available"
 
-        formatted: list[str] = []
-        for name, value in sorted(metrics.items()):
-            formatted.append(f"{name}\t{value:.4f}")
-
+        formatted = [f"{name}\t{value:.4f}" for name, value in sorted(metrics.items())]
         result = "\t".join(formatted)
         return f"{prefix}{result}" if prefix else result
 
     def print_summary(self, epoch: int, phase: str = "Valid") -> None:
         averages = self.get_averages()
-
         print("\n" + "-" * 70)
         print(f"Epoch {epoch} [{phase}] Metrics")
         print("-" * 70)
-
-        print(self.format_metrics(averages, prefix=""))
+        print(self.format_metrics(averages))
 
     def get_metric(self, metric_name: str) -> Optional[float]:
-        averages = self.get_averages()
-        return averages.get(metric_name)
+        return self.get_averages().get(metric_name)
 
 
 def perplexity(context):
     loss = context["loss"]
-    return float(torch.exp(torch.clamp(torch.tensor(loss), max=50)))
+    return float(torch.exp(torch.tensor(loss)))
 
 
 def ppl_to_loss_ratio(outputs, targets, computed_metrics=None):

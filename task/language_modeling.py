@@ -14,7 +14,7 @@ class LMTask(BaseTask):
     def get_loss(pad_idx=0):
         import torch.nn as nn
 
-        return nn.CrossEntropyLoss(ignore_index=pad_idx)
+        return nn.CrossEntropyLoss(ignore_index=pad_idx, reduction="sum")
 
     def postprocess(self, outputs):
         raise NotImplementedError()

@@ -2,7 +2,7 @@ def main():
     from util.util import load_config
     from training.train_orchestrator import run_training
 
-    config = load_config(path="config/bilstm_imdb.yaml")
+    config = load_config(path="config/lstm_ptb.yaml")
     run_training(config)
 
 
