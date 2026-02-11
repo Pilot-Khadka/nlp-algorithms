@@ -1,14 +1,15 @@
 import argparse
 import time
 import math
-import os
 import hashlib
 import numpy as np
 import torch
 from tqdm import tqdm
 
 import data
-import model
+
+# import model
+import my_model
 from utils import batchify, get_batch, repackage_hidden
 from splitcross import SplitCrossEntropyLoss
 from weight_drop import WeightDrop
@@ -59,7 +60,8 @@ class LanguageModelTrainer:
         splits = self.determine_splits(ntokens)
         print(f"Using splits: {splits}")
 
-        model_instance = model.RNNModel(
+        print("self.args.model:", self.args.model)
+        model_instance = my_model.RNNModel(
             self.args.model,
             ntokens,
             self.args.emsize,
@@ -144,12 +146,13 @@ class LanguageModelTrainer:
         num_batches = (data_source.size(0) - 1) // self.args.bptt
 
         with torch.no_grad():
-            for i in tqdm(
-                range(0, data_source.size(0) - 1, self.args.bptt),
-                desc="Evaluating",
-                leave=False,
-                total=num_batches,
-            ):
+            # for i in tqdm(
+            #     range(0, data_source.size(0) - 1, self.args.bptt),
+            #     desc="Evaluating",
+            #     leave=False,
+            #     total=num_batches,
+            # ):
+            for i in range(0, data_source.size(0) - 1, self.args.bptt):
                 data, targets = get_batch(data_source, i, self.args, evaluation=True)
                 output, hidden = self.model(data, hidden)
                 total_loss += (
@@ -174,7 +177,7 @@ class LanguageModelTrainer:
         hidden = self.model.init_hidden(self.args.batch_size)
 
         num_batches = self.train_data.size(0) // self.args.bptt
-        pbar = tqdm(total=num_batches, desc=f"Epoch {epoch}", unit="batch")
+        # pbar = tqdm(total=num_batches, desc=f"Epoch {epoch}", unit="batch")
 
         batch, i = 0, 0
         while i < self.train_data.size(0) - 1 - 1:
@@ -186,7 +189,9 @@ class LanguageModelTrainer:
 
             self.model.train()
             data, targets = get_batch(self.train_data, i, self.args, seq_len=seq_len)
+            # (??, batch size) for the input
             # data shape: (67,20)
+            # 67 * 20 = 1340
             # targets shape: (1340)
 
             hidden = repackage_hidden(hidden)
@@ -213,15 +218,15 @@ class LanguageModelTrainer:
             self.optimizer.param_groups[0]["lr"] = original_lr
 
             if batch % self.args.log_interval == 0 and batch > 0:
-                self.log_training_progress(total_loss, pbar)
+                # self.log_training_progress(total_loss, pbar)
                 total_loss = 0
                 start_time = time.time()
 
             batch += 1
             i += seq_len
-            pbar.update(1)
+            # pbar.update(1)
 
-        pbar.close()
+        # pbar.close()
 
     def get_sequence_length(self):
         bptt = self.args.bptt if np.random.random() < 0.95 else self.args.bptt / 2.0
@@ -276,6 +281,19 @@ class LanguageModelTrainer:
         )
 
     def evaluate_with_averaging(self, epoch_start_time, epoch):
+        uses_asgd = any(("ax" in state) for state in self.optimizer.state.values())
+
+        if not uses_asgd:
+            val_loss = self.evaluate(self.val_data)
+            self.print_validation_results(epoch, epoch_start_time, val_loss)
+
+            if val_loss < self.stored_loss:
+                self.save_checkpoint(self.args.save)
+                print("Saving (no averaging).")
+                self.stored_loss = val_loss
+
+            return val_loss
+
         tmp = {}
         for prm in self.model.parameters():
             tmp[prm] = prm.data.clone()
@@ -325,13 +343,14 @@ class LanguageModelTrainer:
 
     def train(self):
         try:
-            for epoch in tqdm(
-                range(1, self.args.epochs + 1), desc="Training Progress", unit="epoch"
-            ):
+            # for epoch in tqdm(
+            #     range(1, self.args.epochs + 1), desc="Training Progress", unit="epoch"
+            # ):
+            for epoch in range(1, self.args.epochs + 1):
                 epoch_start_time = time.time()
                 self.train_epoch(epoch)
 
-                if "t0" in self.optimizer.param_groups[0]:
+                if isinstance(self.optimizer, torch.optim.ASGD):
                     val_loss = self.evaluate_with_averaging(epoch_start_time, epoch)
                 else:
                     val_loss = self.evaluate_standard(epoch_start_time, epoch)
