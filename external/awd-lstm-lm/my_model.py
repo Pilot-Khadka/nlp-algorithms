@@ -4,6 +4,7 @@ from embed_regularize import embedded_dropout
 from locked_dropout import LockedDropout
 from weight_drop import WeightDrop
 from lstm import LSTM
+from gru import GRU
 
 
 class RNNModel(nn.Module):
@@ -73,6 +74,12 @@ class RNNModel(nn.Module):
 
             elif rnn_type == "GRU":
                 rnn = nn.GRU(input_size, output_size, 1, dropout=0)
+                # rnn = GRU(
+                #     input_dim=input_size,
+                #     hidden_dim=output_size,
+                #     num_layers=1,
+                #     dropout=0,
+                # )
                 if wdrop:
                     rnn = WeightDrop(rnn, ["weight_hh_l0"], dropout=wdrop)
 

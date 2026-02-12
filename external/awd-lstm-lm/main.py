@@ -177,7 +177,7 @@ class LanguageModelTrainer:
         hidden = self.model.init_hidden(self.args.batch_size)
 
         num_batches = self.train_data.size(0) // self.args.bptt
-        # pbar = tqdm(total=num_batches, desc=f"Epoch {epoch}", unit="batch")
+        pbar = tqdm(total=num_batches, desc=f"Epoch {epoch}", unit="batch")
 
         batch, i = 0, 0
         while i < self.train_data.size(0) - 1 - 1:
@@ -224,9 +224,9 @@ class LanguageModelTrainer:
 
             batch += 1
             i += seq_len
-            # pbar.update(1)
+            pbar.update(1)
 
-        # pbar.close()
+        pbar.close()
 
     def get_sequence_length(self):
         bptt = self.args.bptt if np.random.random() < 0.95 else self.args.bptt / 2.0
