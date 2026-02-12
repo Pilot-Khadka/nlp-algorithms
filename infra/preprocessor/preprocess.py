@@ -2,6 +2,7 @@
 downloader -> reader  -> preprocessor(tokenize+encode) -> dataloader -> collator(batchify/pad) -> model
 """
 
+import os
 import torch
 from tqdm import tqdm
 
@@ -96,3 +97,15 @@ class PreprocessedDataset(torch.utils.data.Dataset):
     def __iter__(self):
         for i in range(len(self.examples)):
             yield self.examples[i]
+
+    def save(self, path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        torch.save(self.examples, path)
+        print(f"Saved dataset with {len(self.examples)} examples to {path}")
+
+    @classmethod
+    def load(cls, path):
+        examples = torch.load(path)
+        dataset = cls.__new__(cls)  # bypass __init__
+        dataset.examples = examples
+        return dataset

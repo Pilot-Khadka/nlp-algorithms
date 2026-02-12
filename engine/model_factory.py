@@ -32,11 +32,18 @@ class ClassificationModel(nn.Module):
         super().__init__()
         self.embedding = embedding
         self.encoder = encoder
-        self.output_layer = nn.Linear(encoder.hidden_dim, num_classes)
+
+        bidirectional = getattr(encoder, "bidirectional", False)
+        hidden_dim = encoder.hidden_dim * 2 if bidirectional else encoder.hidden_dim
+
+        self.output_layer = nn.Linear(hidden_dim, num_classes)
+        self.bidirectional = bidirectional
 
     def forward(self, input_ids):
         emb = self.embedding(input_ids)
         outputs, hidden = self.encoder(emb)
+
+        # outputs shape: (B, T, H) or (B, T, 2H) if bidirectional
         logits = self.output_layer(outputs)
         return logits, hidden
 

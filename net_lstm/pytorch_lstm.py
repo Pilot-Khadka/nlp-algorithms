@@ -6,21 +6,18 @@ torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.deterministic = False
 
 
-@register_model("lstm", flags=["unidirectional", "pytorch"])
+@register_model("lstm", flags=["pytorch"])
 class LSTM(nn.Module):
     def __init__(
         self,
         input_dim,
         hidden_dim,
-        output_dim,
         num_layers,
         **kwargs,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
-
-        self.embedding = kwargs.get("embedding_layer", None)
 
         self.lstm = nn.LSTM(
             input_size=input_dim,
@@ -29,17 +26,34 @@ class LSTM(nn.Module):
             batch_first=True,
         )
 
-        self.fc = nn.Linear(hidden_dim, output_dim)
+    def forward(self, x, hidden=None):
+        return self.lstm(x, hidden)
+
+
+@register_model("lstm", flags=["pytorch", "bidirectional"])
+class BiLSTM(nn.Module):
+    def __init__(
+        self,
+        input_dim,
+        hidden_dim,
+        num_layers,
+        **kwargs,
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        self.bidirectional = True
+
+        self.lstm = nn.LSTM(
+            input_size=input_dim,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+            bidirectional=True,
+        )
 
     def forward(self, x, hidden=None):
-        if self.embedding is not None:
-            x = self.embedding(x)
-
-        output_seq, (hn, cn) = self.lstm(x, hidden)
-
-        output_seq = self.fc(output_seq)
-
-        return output_seq
+        return self.lstm(x, hidden)
 
 
 if __name__ == "__main__":

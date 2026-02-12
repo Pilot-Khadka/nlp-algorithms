@@ -14,8 +14,9 @@ class LSTM(nn.Module):
         input_dim,
         hidden_dim,
         num_layers,
-        batch_first=False,
+        batch_first=True,
         dropout=0.0,
+        proj_size=None,
         **kwargs,
     ):
         super().__init__()
@@ -23,20 +24,32 @@ class LSTM(nn.Module):
         self.num_layers = num_layers
         self.batch_first = batch_first
 
+        self.proj_size = proj_size if proj_size is not None else hidden_dim
+        self.dropout_layer = nn.Dropout(p=dropout)
+
         self.gates_forward_x = nn.ModuleList()
         self.gates_forward_h = nn.ModuleList()
-
-        self.dropout_layer = nn.Dropout(p=dropout)
+        self.proj_layers = nn.ModuleList()
 
         for layer in range(num_layers):
             layer_input_dim = input_dim if layer == 0 else hidden_dim
             self.gates_forward_x.append(nn.Linear(layer_input_dim, 4 * hidden_dim))
             self.gates_forward_h.append(nn.Linear(hidden_dim, 4 * hidden_dim))
 
+            if self.proj_size != hidden_dim:
+                proj = nn.Linear(hidden_dim, self.proj_size, bias=False)
+            else:
+                proj = nn.Identity()
+
+            self.proj_layers.append(proj)
+
             setattr(self, f"weight_ih_l{layer}", self.gates_forward_x[layer].weight)
             setattr(self, f"weight_hh_l{layer}", self.gates_forward_h[layer].weight)
             setattr(self, f"bias_ih_l{layer}", self.gates_forward_x[layer].bias)
             setattr(self, f"bias_hh_l{layer}", self.gates_forward_h[layer].bias)
+
+            if self.proj_size != hidden_dim:
+                setattr(self, f"weight_hr_l{layer}", proj.weight)
 
     def forward(self, x, hidden=None):
         batch_size = x.size(0) if self.batch_first else x.size(1)
@@ -72,7 +85,9 @@ class LSTM(nn.Module):
                 o_t = torch.sigmoid(o_t)
 
                 c[layer] = f_t * c[layer] + i_t * g_t
-                h[layer] = o_t * torch.tanh(c[layer])
+                raw_h_t = o_t * torch.tanh(c[layer])
+
+                h[layer] = self.proj_layers[layer](raw_h_t)
 
                 if layer < self.num_layers - 1:
                     layer_input = self.dropout_layer(h[layer])

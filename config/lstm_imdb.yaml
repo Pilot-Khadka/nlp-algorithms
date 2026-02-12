@@ -23,8 +23,6 @@ model:
   hidden_dim: 256
   num_layers: 2
   dropout: 0.3
-  bidirectional: false
-  weight_tying: false
 
 task:
   name: classification 

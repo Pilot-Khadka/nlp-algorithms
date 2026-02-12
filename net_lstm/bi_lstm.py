@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from engine.registry import register_model
 
@@ -11,17 +10,18 @@ class BiLSTM(nn.ModuleList):
         self,
         input_dim,
         hidden_dim,
-        output_dim,
         num_layers,
+        batch_first=True,
         dropout=0.0,
         **kwargs,
     ):
         super().__init__()
+        # used to determine if hidden should be halved
+        self.bidirectional = True
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
-        self.dropout = dropout
-
-        self.embedding = kwargs.get("embedding_layer", None)
+        self.batch_first = batch_first
+        self.dropout_layer = nn.Dropout(p=dropout)
 
         self.gates_forward_x = nn.ModuleList()
         self.gates_forward_h = nn.ModuleList()
@@ -37,26 +37,59 @@ class BiLSTM(nn.ModuleList):
             self.gates_backward_x.append(nn.Linear(in_dim, 4 * hidden_dim))
             self.gates_backward_h.append(nn.Linear(hidden_dim, 4 * hidden_dim))
 
-        self.fc = nn.Linear(2 * hidden_dim, output_dim)
+            setattr(self, f"weight_ih_l{layer}", self.gates_forward_x[layer].weight)
+            setattr(self, f"weight_hh_l{layer}", self.gates_forward_h[layer].weight)
+            setattr(self, f"bias_ih_l{layer}", self.gates_forward_x[layer].bias)
+            setattr(self, f"bias_hh_l{layer}", self.gates_forward_h[layer].bias)
+
+            setattr(
+                self, f"weight_ih_reverse_l{layer}", self.gates_backward_x[layer].weight
+            )
+            setattr(
+                self, f"weight_hh_reverse_l{layer}", self.gates_backward_h[layer].weight
+            )
+            setattr(
+                self, f"bias_ih_reverse_l{layer}", self.gates_backward_x[layer].bias
+            )
+            setattr(
+                self, f"bias_hh_reverse_l{layer}", self.gates_backward_h[layer].bias
+            )
 
     def forward(self, x, hidden=None):
-        assert hidden is None
-        if self.embedding:
-            x = self.embedding(x)
+        batch_size = x.size(0) if self.batch_first else x.size(1)
+        seq_len = x.size(1) if self.batch_first else x.size(0)
+        x = x if self.batch_first else x.transpose(0, 1)
 
-        batch_size, seq_len, _ = x.size()
+        if hidden is None:
+            h = [
+                torch.zeros(batch_size, self.hidden_dim, device=x.device)
+                for _ in range(self.num_layers * 2)
+            ]  # forward + backward
+            c = [
+                torch.zeros(batch_size, self.hidden_dim, device=x.device)
+                for _ in range(self.num_layers * 2)
+            ]
+        else:
+            h_0, c_0 = hidden  # (num_layers*2, B, H)
+            h = [h_0[i] for i in range(self.num_layers * 2)]
+            c = [c_0[i] for i in range(self.num_layers * 2)]
+
+        outputs = x
 
         for layer in range(self.num_layers):
-            # project inputs for this layer
-            x_proj_f = self.gates_forward_x[layer](x)
-            x_proj_b = self.gates_backward_x[layer](x)
+            layer_input = outputs
 
-            h_t_f = torch.zeros(batch_size, self.hidden_dim, device=x.device)
-            c_t_f = torch.zeros(batch_size, self.hidden_dim, device=x.device)
-            outputs_f = []
+            out_f_list = []
+            out_b_list = []
+
+            # forward
+            h_f = h[layer * 2]
+            c_f = c[layer * 2]
 
             for t in range(seq_len):
-                gates = x_proj_f[:, t, :] + self.gates_forward_h[layer](h_t_f)
+                gates = self.gates_forward_x[layer](
+                    layer_input[:, t, :]
+                ) + self.gates_forward_h[layer](h_f)
                 f_t, i_t, g_t, o_t = gates.chunk(4, dim=1)
 
                 f_t = torch.sigmoid(f_t)
@@ -64,16 +97,19 @@ class BiLSTM(nn.ModuleList):
                 g_t = torch.tanh(g_t)
                 o_t = torch.sigmoid(o_t)
 
-                c_t_f = f_t * c_t_f + i_t * g_t
-                h_t_f = o_t * torch.tanh(c_t_f)
-                outputs_f.append(h_t_f.unsqueeze(1))
+                c_f = f_t * c_f + i_t * g_t
+                h_f = o_t * torch.tanh(c_f)
 
-            h_t_b = torch.zeros(batch_size, self.hidden_dim, device=x.device)
-            c_t_b = torch.zeros(batch_size, self.hidden_dim, device=x.device)
-            outputs_b = []
+                out_f_list.append(h_f.unsqueeze(1))
 
-            for t in range(seq_len - 1, -1, -1):
-                gates = x_proj_b[:, t, :] + self.gates_backward_h[layer](h_t_b)
+            # backward
+            h_b = h[layer * 2 + 1]
+            c_b = c[layer * 2 + 1]
+
+            for t in reversed(range(seq_len)):
+                gates = self.gates_backward_x[layer](
+                    layer_input[:, t, :]
+                ) + self.gates_backward_h[layer](h_b)
                 f_t, i_t, g_t, o_t = gates.chunk(4, dim=1)
 
                 f_t = torch.sigmoid(f_t)
@@ -81,21 +117,33 @@ class BiLSTM(nn.ModuleList):
                 g_t = torch.tanh(g_t)
                 o_t = torch.sigmoid(o_t)
 
-                c_t_b = f_t * c_t_b + i_t * g_t
-                h_t_b = o_t * torch.tanh(c_t_b)
-                outputs_b.append(h_t_b.unsqueeze(1))
+                c_b = f_t * c_b + i_t * g_t
+                h_b = o_t * torch.tanh(c_b)
 
-            outputs_b.reverse()
+                out_b_list.append(h_b.unsqueeze(1))
 
-            outputs_f = torch.cat(outputs_f, dim=1)
-            outputs_b = torch.cat(outputs_b, dim=1)
+            out_b_list.reverse()
 
-            x = torch.cat([outputs_f, outputs_b], dim=2)  # input to next layer
+            out_f = torch.cat(out_f_list, dim=1)
+            out_b = torch.cat(out_b_list, dim=1)
 
-            if self.dropout > 0 and layer < self.num_layers - 1:
-                x = F.dropout(x, p=self.dropout, training=self.training)
+            outputs = torch.cat([out_f, out_b], dim=2)  # (B, T, 2H)
 
-        return self.fc(x)
+            h[layer * 2] = h_f
+            c[layer * 2] = c_f
+            h[layer * 2 + 1] = h_b
+            c[layer * 2 + 1] = c_b
+
+            if layer < self.num_layers - 1:
+                outputs = self.dropout_layer(outputs)
+
+        if not self.batch_first:
+            outputs = outputs.transpose(0, 1).contiguous()
+
+        h_n = torch.stack(h, dim=0)  # (num_layers*2, B, H)
+        c_n = torch.stack(c, dim=0)
+
+        return outputs, (h_n, c_n)
 
 
 if __name__ == "__main__":

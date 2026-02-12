@@ -185,8 +185,11 @@ class DatasetBundleBuilder:
 
         data_reader_cls = get_from_registry(DATA_READER_REGISTRY, config.dataset.name)
 
-        train = data_reader_cls(data_dir=data_dir, split="train")
-        test = data_reader_cls(data_dir=data_dir, split="test")
+        max_samples = config.dataset.get("max_samples", None)
+        train = data_reader_cls(
+            data_dir=data_dir, split="train", max_samples=max_samples
+        )
+        test = data_reader_cls(data_dir=data_dir, split="test", max_samples=max_samples)
 
         tokenizer_cls = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
 

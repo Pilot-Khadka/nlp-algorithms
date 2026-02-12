@@ -1,5 +1,7 @@
 from typing import Any, Union, Optional
 
+import os
+import hashlib
 from dataclasses import dataclass
 
 import torch
@@ -34,6 +36,12 @@ class TrainerBundle:
     task: Any
     criterion: torch.nn.Module
     metric_names: list
+
+
+def get_dataset_filename(task, base_dataset_name, max_len, extra=""):
+    key = f"{task}_{base_dataset_name}_{max_len}_{extra}"
+    hash_str = hashlib.md5(key.encode()).hexdigest()[:8]  # 8-char hash
+    return f"data/preprocessed/{task}_{hash_str}.pt"
 
 
 class TrainerBuilder:
@@ -155,23 +163,46 @@ class TrainerBuilder:
         return train_iterator, test_iterator
 
     def build_standard_dataloaders(self, data_bundle) -> tuple[DataLoader, DataLoader]:
-        processed_train = PreprocessedDataset(
-            data_bundle.train,
-            src_tokenizer=data_bundle.src_tokenizer,
-            tgt_tokenizer=data_bundle.tgt_tokenizer,
-            vocab=data_bundle.vocab,
-            max_len=self.config.dataset.sequence_length,
+        train_name = get_dataset_filename(
             task=self.config.task.name,
+            base_dataset_name=self.config.dataset.name,
+            max_len=self.config.dataset.sequence_length,
+            extra="train",
+        )
+        test_name = get_dataset_filename(
+            task=self.config.task.name,
+            base_dataset_name=self.config.dataset.name,
+            max_len=self.config.dataset.sequence_length,
+            extra="test",
         )
 
-        processed_test = PreprocessedDataset(
-            data_bundle.test,
-            src_tokenizer=data_bundle.src_tokenizer,
-            tgt_tokenizer=data_bundle.tgt_tokenizer,
-            vocab=data_bundle.vocab,
-            max_len=self.config.dataset.sequence_length,
-            task=self.config.task.name,
-        )
+        if os.path.exists(train_name):
+            processed_train = PreprocessedDataset.load(train_name)
+            print(f"Loaded preprocessed train dataset from {train_name}")
+        else:
+            processed_train = PreprocessedDataset(
+                data_bundle.train,
+                src_tokenizer=data_bundle.src_tokenizer,
+                tgt_tokenizer=data_bundle.tgt_tokenizer,
+                vocab=data_bundle.vocab,
+                max_len=self.config.dataset.sequence_length,
+                task=self.config.task.name,
+            )
+            processed_train.save(train_name)
+
+        if os.path.exists(test_name):
+            processed_test = PreprocessedDataset.load(test_name)
+            print(f"Loaded preprocessed test dataset from {test_name}")
+        else:
+            processed_test = PreprocessedDataset(
+                data_bundle.test,
+                src_tokenizer=data_bundle.src_tokenizer,
+                tgt_tokenizer=data_bundle.tgt_tokenizer,
+                vocab=data_bundle.vocab,
+                max_len=self.config.dataset.sequence_length,
+                task=self.config.task.name,
+            )
+            processed_test.save(test_name)
 
         collator = get_from_registry(COLLATOR_REGISTRY, self.config.task.name)(
             vocab=data_bundle.vocab,
