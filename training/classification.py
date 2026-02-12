@@ -114,7 +114,6 @@ class ClassificationTrainer(BaseTrainer):
         else:
             valid_progress = self.test_loader
 
-        all_logits = []
         all_predictions = []
         all_targets = []
 

@@ -82,6 +82,7 @@ class TrainerBuilder:
             model_config=self.config.model,
             dataset_bundle=data_bundle,
             task_config=self.config.task,
+            data_config=self.config.dataset,
         )
 
         model.to(self.device)

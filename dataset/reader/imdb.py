@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import os
 from tqdm import tqdm
@@ -10,7 +10,12 @@ from engine.registry import register_reader
 
 @register_reader("imdb")
 class IMDBDataset(Dataset):
-    def __init__(self, data_dir: str, split: str):
+    def __init__(
+        self,
+        data_dir: str,
+        split: str,
+        max_samples: Optional[int] = None,
+    ):
         self.data_dir = data_dir
         self.split = split
 
@@ -21,7 +26,11 @@ class IMDBDataset(Dataset):
                 f"Call IMDBDownloader.download_and_prepare(cfg) first."
             )
 
-        self.examples = self._load_raw_data()
+        examples = self._load_raw_data()
+        if max_samples is not None:
+            examples = examples[:max_samples]
+
+        self.examples = examples
 
     def _load_raw_data(self) -> List[Dict[str, str]]:
         split_dir = os.path.join(self.data_dir, self.split)

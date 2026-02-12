@@ -1,6 +1,7 @@
 dataset:
   name: ptb
   sequence_length: 35
+  vocab_size: 10000
   data_dir: dataset/dataset_penn_treebank/
   train_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.train.txt"
   valid_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.valid.txt"
@@ -9,12 +10,15 @@ dataset:
   pin_memory: true
   prefetch_factor: 2
 
+tokenizer:
+  name: bpe
+
 model:
   name: rnn
   input_dim: 300
   hidden_dim: 650
   num_layers: 2
-  dropout: 0.5
+  dropout: 0.3
   bidirectional: false
 
 train:
@@ -22,7 +26,7 @@ train:
   batch_size: 32
   multi_gpu: true
   optimizer: adamw
-  learning_rate: 1e-3
+  learning_rate: 5e-4
   lr_decay: 0.5
   grad_clip: 0.25
   weight_decay: 1e-4

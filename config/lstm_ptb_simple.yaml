@@ -1,6 +1,7 @@
 dataset:
   name: ptb
   sequence_length: 35
+  vocab_size: 5000
   data_dir: dataset/dataset_penn_treebank/
   train_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.train.txt"
   valid_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.valid.txt"
@@ -9,6 +10,8 @@ dataset:
   pin_memory: true
   prefetch_factor: 2
 
+tokenizer:
+  name: bpe
 
 model:
   name: awd-lstm

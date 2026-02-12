@@ -39,7 +39,12 @@ def build_or_load_index(text_file, max_samples=None, desc="Indexing"):
 
 @register_reader("tatoeba")
 class TatoebaDataset(torch.utils.data.Dataset):
-    def __init__(self, data_dir: str, split: str, max_samples: Optional[int] = None):
+    def __init__(
+        self,
+        data_dir: str,
+        split: str,
+        max_samples: Optional[int] = None,
+    ):
         self.split = split
         self.data_dir = data_dir
         self.src_file = os.path.join(data_dir, f"{split}.src")

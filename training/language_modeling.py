@@ -55,6 +55,15 @@ class LanguageModelingTask(BaseTrainer):
             return tqdm(loader, desc=desc, leave=False)
         return loader
 
+    def _unpack_outputs(self, outputs):
+        if not isinstance(outputs, tuple):
+            return outputs, None, None
+
+        logits, state = outputs
+        if isinstance(state, tuple) and len(state) == 2:
+            return logits, state[0], state[1]
+        return logits, state, None
+
     def train_one_epoch(self, epoch, total_epochs) -> float:
         self.model.train()
 
@@ -74,7 +83,7 @@ class LanguageModelingTask(BaseTrainer):
             f"Epoch {epoch + 1}/{total_epochs} [Train]",
         )
 
-        train_loss = 0.0
+        total_loss_sum = 0.0
         total_tokens = 0
         for inputs, targets in progress:
             # For PTB iterator: x, y are (seq_len, batch_size) by default
@@ -93,20 +102,9 @@ class LanguageModelingTask(BaseTrainer):
                 ),
             )
 
-            if isinstance(outputs, tuple):
-                logits, state = outputs
+            logits, hidden, cell = self._unpack_outputs(outputs)
 
-                # LSTM: (hidden, cell)
-                if isinstance(state, tuple) and len(state) == 2:
-                    hidden, cell = state
-                # RNN / GRU: hidden only
-                else:
-                    hidden = state
-                    cell = None
-            else:
-                logits = outputs
-                hidden, cell = None, None
-
+            # CE mean reduced
             loss = self.criterion(
                 logits.view(-1, logits.size(-1)),
                 targets.view(-1),
@@ -121,26 +119,26 @@ class LanguageModelingTask(BaseTrainer):
             self.optimizer.step()
 
             batch_tokens = targets.numel()
-            train_loss += loss.item()
+            # convert mean loss into token weighted sum
+            loss_value = loss.item()
+            total_loss_sum += loss_value * batch_tokens
             total_tokens += batch_tokens
 
             if self.is_main and hasattr(progress, "set_postfix"):
-                avg_loss = train_loss / total_tokens
-                cast(tqdm, progress).set_postfix(
-                    {
-                        "Avg Loss": f"{avg_loss:.4f}",
-                        "PPL": f"{torch.exp(torch.tensor(avg_loss)).item():.2f}",
-                    }
-                )
-
-        avg_train_loss = train_loss / total_tokens if total_tokens > 0 else 0.0
+                avg_loss = total_loss_sum / total_tokens
+                postfix = {
+                    "Val Loss": f"{loss_value:.4f}",
+                    "Avg Val Loss": f"{avg_loss:.4f}",
+                    "PPL": f"{torch.exp(torch.tensor(avg_loss)).item():.2f}",
+                }
+                cast(tqdm, progress).set_postfix(postfix)
 
         if self.use_ddp:
-            loss_tensor = torch.tensor([train_loss, total_tokens], device=self.device)
-            dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
-            avg_train_loss = (loss_tensor[0] / loss_tensor[1]).item()
+            t = torch.tensor([total_loss_sum, total_tokens], device=self.device)
+            dist.all_reduce(t, op=dist.ReduceOp.SUM)
+            total_loss_sum, total_tokens = t.tolist()
 
-        return avg_train_loss
+        return total_loss_sum / total_tokens
 
     def evaluate_one_epoch(self, epoch, total_epochs) -> tuple[float, Dict[str, float]]:
         self.model.eval()
@@ -157,7 +155,7 @@ class LanguageModelingTask(BaseTrainer):
             f"Epoch {epoch + 1}/{total_epochs} [Valid]",
         )
 
-        total_loss = 0.0
+        total_loss_sum = 0.0
         total_tokens = 0
 
         all_logits = []
@@ -165,6 +163,10 @@ class LanguageModelingTask(BaseTrainer):
         with torch.no_grad():
             for inputs, targets in progress:
                 inputs, targets = inputs.to(self.device), targets.to(self.device)
+
+                hidden = self._detach(hidden)
+                cell = self._detach(cell)
+
                 batch_tokens = targets.numel()
 
                 outputs = self.model(
@@ -174,17 +176,7 @@ class LanguageModelingTask(BaseTrainer):
                     ),
                 )
 
-                if isinstance(outputs, tuple):
-                    logits, state = outputs
-
-                    if isinstance(state, tuple) and len(state) == 2:
-                        hidden, cell = state
-                    else:
-                        hidden = state
-                        cell = None
-                else:
-                    logits = outputs
-                    hidden, cell = None, None
+                logits, hidden, cell = self._unpack_outputs(outputs)
 
                 if torch.isnan(logits).any() or torch.isinf(logits).any():
                     raise ValueError(
@@ -196,7 +188,7 @@ class LanguageModelingTask(BaseTrainer):
                 )
                 loss_value = loss.item()
 
-                total_loss += loss_value * batch_tokens
+                total_loss_sum += loss_value * batch_tokens
                 total_tokens += batch_tokens
 
                 # invariant of sequence length
@@ -206,28 +198,23 @@ class LanguageModelingTask(BaseTrainer):
                 all_targets.append(targets.view(-1).detach().cpu())  # (batch*seq,)
 
                 if self.is_main and hasattr(progress, "set_postfix"):
-                    current_metrics = self.metrics_tracker.get_averages()
-                    avg_loss = total_loss / total_tokens
+                    avg_loss = total_loss_sum / total_tokens
                     postfix = {
                         "Val Loss": f"{loss_value:.4f}",
                         "Avg Val Loss": f"{avg_loss:.4f}",
                         "PPL": f"{torch.exp(torch.tensor(avg_loss)).item():.2f}",
                     }
-                    postfix.update({k: f"{v:.4f}" for k, v in current_metrics.items()})
                     cast(tqdm, progress).set_postfix(postfix)
 
         all_logits = torch.cat(all_logits, dim=0)
         all_targets = torch.cat(all_targets, dim=0)
-        avg_valid_loss = total_loss / total_tokens if total_tokens > 0 else 0.0
 
         if self.use_ddp:
-            loss_tensor = torch.tensor(
-                [total_loss, float(total_tokens)], device=self.device
-            )
-            dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
-            avg_valid_loss = (loss_tensor[0] / loss_tensor[1]).item()
-        else:
-            avg_valid_loss = total_loss / total_tokens if total_tokens > 0 else 0.0
+            t = torch.tensor([total_loss_sum, float(total_tokens)], device=self.device)
+            dist.all_reduce(t, op=dist.ReduceOp.SUM)
+            total_loss_sum, total_tokens = t.tolist()
+
+        avg_loss = total_loss_sum / total_tokens
 
         if self.use_ddp:
             world_size = dist.get_world_size()
@@ -239,15 +226,19 @@ class LanguageModelingTask(BaseTrainer):
             all_targets = torch.cat(targets_list, dim=0)
 
         context = {
-            "loss": avg_valid_loss,
-            "outputs": all_logits.cpu(),
-            "targets": all_targets.cpu(),
+            "loss": avg_loss,
+            "outputs": all_logits,
+            "targets": all_targets,
+            "tokens": total_tokens,
         }
 
-        avg_metrics = {"loss": avg_valid_loss, "tokens": total_tokens}
+        final_metrics = {
+            "loss": avg_loss,
+            "tokens": total_tokens,
+        }
         for name in self.metrics_tracker.metric_names:
             if hasattr(lm_metrics, name):
-                avg_metrics[name] = getattr(lm_metrics, name)(context)
+                final_metrics[name] = getattr(lm_metrics, name)(context)
 
-        self.metrics_tracker.update(avg_metrics)
-        return avg_valid_loss, avg_metrics
+        self.metrics_tracker.update(final_metrics)
+        return avg_loss, final_metrics

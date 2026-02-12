@@ -13,54 +13,57 @@ class LSTM(nn.Module):
         self,
         input_dim,
         hidden_dim,
-        output_dim,
         num_layers,
+        batch_first=False,
+        dropout=0.0,
         **kwargs,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
-
-        self.embedding = kwargs.get("embedding_layer", None)
+        self.batch_first = batch_first
 
         self.gates_forward_x = nn.ModuleList()
         self.gates_forward_h = nn.ModuleList()
+
+        self.dropout_layer = nn.Dropout(p=dropout)
 
         for layer in range(num_layers):
             layer_input_dim = input_dim if layer == 0 else hidden_dim
             self.gates_forward_x.append(nn.Linear(layer_input_dim, 4 * hidden_dim))
             self.gates_forward_h.append(nn.Linear(hidden_dim, 4 * hidden_dim))
 
-        self.fc = nn.Linear(hidden_dim, output_dim)
+            setattr(self, f"weight_ih_l{layer}", self.gates_forward_x[layer].weight)
+            setattr(self, f"weight_hh_l{layer}", self.gates_forward_h[layer].weight)
+            setattr(self, f"bias_ih_l{layer}", self.gates_forward_x[layer].bias)
+            setattr(self, f"bias_hh_l{layer}", self.gates_forward_h[layer].bias)
 
     def forward(self, x, hidden=None):
-        if self.embedding:
-            x = self.embedding(x)
-
-        batch_size, seq_len, _ = x.size()
+        batch_size = x.size(0) if self.batch_first else x.size(1)
+        seq_len = x.size(1) if self.batch_first else x.size(0)
+        x = x if self.batch_first else x.transpose(0, 1)
 
         if hidden is None:
             h = [
                 torch.zeros(batch_size, self.hidden_dim, device=x.device)
                 for _ in range(self.num_layers)
             ]
+            c = [
+                torch.zeros(batch_size, self.hidden_dim, device=x.device)
+                for _ in range(self.num_layers)
+            ]
         else:
-            h = list(hidden)
-
-        c = [
-            torch.zeros(batch_size, self.hidden_dim, device=x.device)
-            for _ in range(self.num_layers)
-        ]
+            h_0, c_0 = hidden  # each: (num_layers, batch, H)
+            h = [h_0[i] for i in range(self.num_layers)]  # list of (batch, H)
+            c = [c_0[i] for i in range(self.num_layers)]
 
         outputs = []
         for t in range(seq_len):
             layer_input = x[:, t, :]
-
             for layer in range(self.num_layers):
                 all_gates = self.gates_forward_x[layer](
                     layer_input
                 ) + self.gates_forward_h[layer](h[layer])
-
                 f_t, i_t, g_t, o_t = all_gates.chunk(4, dim=1)
 
                 f_t = torch.sigmoid(f_t)
@@ -71,18 +74,25 @@ class LSTM(nn.Module):
                 c[layer] = f_t * c[layer] + i_t * g_t
                 h[layer] = o_t * torch.tanh(c[layer])
 
-                layer_input = h[layer]
+                if layer < self.num_layers - 1:
+                    layer_input = self.dropout_layer(h[layer])
+                else:
+                    layer_input = h[layer]
 
-            outputs.append(h[-1].unsqueeze(1))  # (B, 1, H)
+            outputs.append(h[-1].unsqueeze(1))
 
         outputs = torch.cat(outputs, dim=1)
-        output_seq = self.fc(outputs)
+        h_n = torch.stack(h, dim=0)  # (num_layers, batch, H)
+        c_n = torch.stack(c, dim=0)
 
-        return output_seq
+        if not self.batch_first:
+            outputs = outputs.transpose(0, 1).contiguous()
+
+        return outputs, (h_n, c_n)
 
 
 if __name__ == "__main__":
-    model = LSTM(input_dim=10, hidden_dim=20, output_dim=5, num_layers=1)
+    model = LSTM(input_dim=10, hidden_dim=20, num_layers=1)
     print(model)
 
     x_dummy = torch.randn(3, 7, 10)  # (batch_size, seq_len, input_dim)
