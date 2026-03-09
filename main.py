@@ -1,6 +1,6 @@
 def main():
-    from util.util import load_config
-    from training.train_orchestrator import run_training
+    from nlp_algorithms.util import load_config
+    from nlp_algorithms.training import run_training
 
     config = load_config(path="config/bilstm_imdb.yaml")
     run_training(config)

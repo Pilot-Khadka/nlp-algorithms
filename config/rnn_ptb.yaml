@@ -2,7 +2,7 @@ dataset:
   name: ptb
   sequence_length: 35
   vocab_size: 10000
-  data_dir: dataset/dataset_penn_treebank/
+  data_dir: data/dataset_penn_treebank/
   train_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.train.txt"
   valid_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.valid.txt"
   test_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.test.txt"

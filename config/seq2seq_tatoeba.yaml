@@ -1,7 +1,7 @@
 dataset:
   name: tatoeba
   language: eng_nep
-  data_dir: ../dataset/dataset_tatoeba_eng_nep/
+  data_dir: data/dataset_tatoeba_eng_nep/
   url: "https://object.pouta.csc.fi/Tatoeba-Challenge-v2023-09-26/eng-nep.tar"
 
   use_cache: true

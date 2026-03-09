@@ -2,8 +2,8 @@ dataset:
   name: imdb
   sequence_length: 256
   vocab_size: 10000
-  
-  data_dir: dataset/dataset_imdb/
+
+  data_dir: data/dataset_imdb/
   url: "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
   num_class: 2
 
