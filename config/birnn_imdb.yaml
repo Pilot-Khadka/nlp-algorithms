@@ -1,5 +1,6 @@
 dataset:
   name: imdb
+  num_class: 2
   sequence_length: 256
   vocab_size: 10000
   data_dir: data/dataset_imdb/
@@ -17,8 +18,7 @@ model:
   name: rnn
   input_dim: 128
   hidden_dim: 256
-  num_layers: 1
-  dropout: 0.5
+  num_layers: 2
   bidirectional: true
   weight_tying: false
 

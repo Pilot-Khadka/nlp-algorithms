@@ -5,7 +5,7 @@ dataset:
   data_dir: data/dataset_imdb/
   url: "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
   num_class: 2
-  
+
   use_cache: true
   num_workers: auto
   pin_memory: true
@@ -19,7 +19,6 @@ model:
   input_dim: 128
   hidden_dim: 256
   num_layers: 2
-  dropout: 0.3
   bidirectional: true
   weight_tying: false
   pytorch: true

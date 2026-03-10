@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 from nlp_algorithms.engine.registry import register_model
@@ -12,104 +11,87 @@ class BidirectionalRNN(nn.Module):
         self,
         input_dim,
         hidden_dim,
-        output_dim,
         num_layers,
+        batch_first=True,
         dropout=0.0,
         **kwargs,
     ):
         super().__init__()
-        self.input_dim = input_dim
+        self.bidirectional = True
         self.hidden_dim = hidden_dim
-        self.output_dim = output_dim
         self.num_layers = num_layers
+        self.batch_first = batch_first
+        self.dropout_layer = nn.Dropout(p=dropout)
 
-        self.dropout = dropout
-        self.embedding = kwargs.get("embedding_layer", None)
-
-        self.forward_layers = nn.ModuleList()
-        self.backward_layers = nn.ModuleList()
+        self.gates_x_fwd = nn.ModuleList()
+        self.gates_h_fwd = nn.ModuleList()
+        self.gates_x_bwd = nn.ModuleList()
+        self.gates_h_bwd = nn.ModuleList()
 
         for layer in range(num_layers):
-            in_dim = input_dim if layer == 0 else 2 * hidden_dim
-            self.forward_layers.append(nn.Linear(in_dim + hidden_dim, hidden_dim))
-            self.backward_layers.append(nn.Linear(in_dim + hidden_dim, hidden_dim))
+            layer_input_dim = input_dim if layer == 0 else 2 * hidden_dim
+            self.gates_x_fwd.append(nn.Linear(layer_input_dim, hidden_dim))
+            self.gates_h_fwd.append(nn.Linear(hidden_dim, hidden_dim))
+            self.gates_x_bwd.append(nn.Linear(layer_input_dim, hidden_dim))
+            self.gates_h_bwd.append(nn.Linear(hidden_dim, hidden_dim))
 
-        self.fc = nn.Linear(2 * hidden_dim, output_dim)
-
-    def init_hidden(self, batch_size, device):
-        return [
-            (
-                torch.zeros(batch_size, self.hidden_dim, device=device),
-                torch.zeros(batch_size, self.hidden_dim, device=device),
-            )
-            for _ in range(self.num_layers)
-        ]
+            setattr(self, f"weight_ih_l{layer}", self.gates_x_fwd[layer].weight)
+            setattr(self, f"weight_hh_l{layer}", self.gates_h_fwd[layer].weight)
+            setattr(self, f"bias_ih_l{layer}", self.gates_x_fwd[layer].bias)
+            setattr(self, f"bias_hh_l{layer}", self.gates_h_fwd[layer].bias)
+            setattr(self, f"weight_ih_l{layer}_reverse", self.gates_x_bwd[layer].weight)
+            setattr(self, f"weight_hh_l{layer}_reverse", self.gates_h_bwd[layer].weight)
+            setattr(self, f"bias_ih_l{layer}_reverse", self.gates_x_bwd[layer].bias)
+            setattr(self, f"bias_hh_l{layer}_reverse", self.gates_h_bwd[layer].bias)
 
     def forward(self, x, hidden=None):
-        assert hidden is None
-        if self.embedding:
-            x = self.embedding(x)
+        batch_size = x.size(0) if self.batch_first else x.size(1)
+        seq_len = x.size(1) if self.batch_first else x.size(0)
+        x = x if self.batch_first else x.transpose(0, 1)
 
-        batch_size, seq_len, _ = x.size()
-
-        hidden = self.init_hidden(batch_size, x.device)
+        if hidden is None:
+            h_fwd = [
+                torch.zeros(batch_size, self.hidden_dim, device=x.device)
+                for _ in range(self.num_layers)
+            ]
+            h_bwd = [
+                torch.zeros(batch_size, self.hidden_dim, device=x.device)
+                for _ in range(self.num_layers)
+            ]
+        else:
+            h_fwd = [hidden[layer * 2] for layer in range(self.num_layers)]
+            h_bwd = [hidden[layer * 2 + 1] for layer in range(self.num_layers)]
 
         layer_input = x
-        final_hidden = []
-
-        last_forward_out = None
-        last_backward_out = None
-
         for layer in range(self.num_layers):
-            h_f, h_b = hidden[layer]
+            fwd_out = torch.empty(batch_size, seq_len, self.hidden_dim, device=x.device)
+            bwd_out = torch.empty(batch_size, seq_len, self.hidden_dim, device=x.device)
 
-            forward_out = torch.empty(
-                batch_size, seq_len, self.hidden_dim, device=x.device
-            )
-            backward_out = torch.empty(
-                batch_size, seq_len, self.hidden_dim, device=x.device
-            )
-
-            forward_linear = self.forward_layers[layer]
-            backward_linear = self.backward_layers[layer]
-
-            # forward direction
             for t in range(seq_len):
-                inp = torch.cat((layer_input[:, t, :], h_f), dim=1)
-                h_f = torch.tanh(forward_linear(inp))
-                forward_out[:, t, :] = h_f
+                h_fwd[layer] = torch.tanh(
+                    self.gates_x_fwd[layer](layer_input[:, t, :])
+                    + self.gates_h_fwd[layer](h_fwd[layer])
+                )
+                fwd_out[:, t, :] = h_fwd[layer]
 
-            # backward direction
             for t in range(seq_len - 1, -1, -1):
-                inp = torch.cat((layer_input[:, t, :], h_b), dim=1)
-                h_b = torch.tanh(backward_linear(inp))
-                backward_out[:, t, :] = h_b
-
-            if self.dropout > 0 and layer < self.num_layers - 1:
-                forward_out = F.dropout(
-                    forward_out, p=self.dropout, training=self.training
+                h_bwd[layer] = torch.tanh(
+                    self.gates_x_bwd[layer](layer_input[:, t, :])
+                    + self.gates_h_bwd[layer](h_bwd[layer])
                 )
-                backward_out = F.dropout(
-                    backward_out, p=self.dropout, training=self.training
-                )
+                bwd_out[:, t, :] = h_bwd[layer]
 
-            final_hidden.append((h_f, h_b))
-            layer_input = torch.cat((forward_out, backward_out), dim=2)
+            layer_input = torch.cat((fwd_out, bwd_out), dim=2)
+            if layer < self.num_layers - 1:
+                layer_input = self.dropout_layer(layer_input)
 
-            # save last layer outputs
-            last_forward_out = forward_out
-            last_backward_out = backward_out
+        outputs = layer_input
+        h_n = torch.stack([h for pair in zip(h_fwd, h_bwd) for h in pair], dim=0)
 
-        assert last_backward_out is not None
-        assert last_forward_out is not None
-        # bi_out = torch.cat((last_forward_out, last_backward_out), dim=2)
-        # output_seq = self.fc(bi_out)
+        if not self.batch_first:
+            outputs = outputs.transpose(0, 1).contiguous()
 
-        h_f, h_b = final_hidden[-1]  # (batch, hidden_dim) each
-        seq_repr = torch.cat((h_f, h_b), dim=1)  # (batch, 2 * hidden_dim)
-        logits = self.fc(seq_repr)
-        return logits, final_hidden
-        # return output_seq, final_hidden
+        return outputs, h_n
 
 
 if __name__ == "__main__":

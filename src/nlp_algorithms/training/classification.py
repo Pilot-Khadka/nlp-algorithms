@@ -23,10 +23,6 @@ class ClassificationTrainer(BaseTrainer):
             ):
                 self.train_loader.sampler.set_epoch(epoch)
 
-        total_train_loss = 0.0
-        total_samples = 0
-        correct_predictions = 0
-
         train_progress: Union[Any, tqdm]
         if self.is_main:
             if self.config.show_progress:
@@ -85,10 +81,9 @@ class ClassificationTrainer(BaseTrainer):
                 and self.config.show_progress
                 and hasattr(train_progress, "set_postfix")
             ):
-                avg_loss = total_train_loss / total_samples
                 avg_acc = correct_predictions / total_samples
                 short_metrics = self._tqdm_format_metrics(
-                    {"Loss": loss.item(), "AvgLoss": avg_loss, "Acc": avg_acc}
+                    {"Loss": loss.item(), "Acc": avg_acc}
                 )
                 cast(tqdm, train_progress).set_postfix_str(short_metrics)
 

@@ -12,7 +12,6 @@ dataset:
   pin_memory: true
   prefetch_factor: 2
 
-
 tokenizer:
   # name: whitespace
   name: bpe
@@ -22,7 +21,6 @@ model:
   input_dim: 128
   hidden_dim: 256
   num_layers: 2
-  dropout: 0.3
 
 task:
   name: classification
@@ -37,4 +35,4 @@ train:
   batch_size: 64
   multi_gpu: true
   learning_rate: 1e-3
-  grad_clip: 5.0
+  grad_clip: 1.0

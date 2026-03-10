@@ -142,7 +142,6 @@ class BiLSTM(nn.ModuleList):
 
         h_n = torch.stack(h, dim=0)  # (num_layers*2, B, H)
         c_n = torch.stack(c, dim=0)
-
         return outputs, (h_n, c_n)
 
 

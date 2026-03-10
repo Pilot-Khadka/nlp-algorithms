@@ -1,69 +1,98 @@
 import torch
 import torch.nn as nn
 
-from .gru_cell import GRUCell
 from nlp_algorithms.engine.registry import register_model
 
+torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.deterministic = False
 
-@register_model("gru", flags=["unidirectional"])
+
+@register_model("gru")
 class GRU(nn.Module):
     def __init__(
         self,
         input_dim,
         hidden_dim,
-        output_dim,
-        num_layers=2,
+        num_layers,
+        batch_first=True,
         dropout=0.0,
         **kwargs,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
-        self.embedding = kwargs.get("embedding_layer", None)
+        self.batch_first = batch_first
 
-        self.layers = nn.ModuleList()
-        for i in range(num_layers):
-            layer_input_dim = input_dim if i == 0 else hidden_dim
-            self.layers.append(GRUCell(layer_input_dim, hidden_dim))
+        self.dropout_layer = nn.Dropout(p=dropout)
 
-        self.dropout = nn.Dropout(dropout)
-        self.fc = nn.Linear(hidden_dim, output_dim)
+        self.gates_forward_x = nn.ModuleList()
+        self.gates_forward_h = nn.ModuleList()
+
+        for layer in range(num_layers):
+            layer_input_dim = input_dim if layer == 0 else hidden_dim
+            self.gates_forward_x.append(nn.Linear(layer_input_dim, 3 * hidden_dim))
+            self.gates_forward_h.append(nn.Linear(hidden_dim, 3 * hidden_dim))
+
+            setattr(self, f"weight_ih_l{layer}", self.gates_forward_x[layer].weight)
+            setattr(self, f"weight_hh_l{layer}", self.gates_forward_h[layer].weight)
+            setattr(self, f"bias_ih_l{layer}", self.gates_forward_x[layer].bias)
+            setattr(self, f"bias_hh_l{layer}", self.gates_forward_h[layer].bias)
 
     def forward(self, x, hidden=None):
-        if self.embedding:
-            x = self.embedding(x)
-
-        batch_size, seq_len, _ = x.size()
+        batch_size = x.size(0) if self.batch_first else x.size(1)
+        seq_len = x.size(1) if self.batch_first else x.size(0)
+        x = x if self.batch_first else x.transpose(0, 1)
 
         if hidden is None:
-            hidden = [
+            h = [
                 torch.zeros(batch_size, self.hidden_dim, device=x.device)
                 for _ in range(self.num_layers)
             ]
+        else:
+            h = [hidden[i] for i in range(self.num_layers)]
 
         outputs = []
         for t in range(seq_len):
-            x_t = x[:, t, :]
-            new_hidden = []
+            layer_input = x[:, t, :]
+            for layer in range(self.num_layers):
+                r_x, z_x, n_x = self.gates_forward_x[layer](layer_input).chunk(3, dim=1)
+                r_h, z_h, n_h = self.gates_forward_h[layer](h[layer]).chunk(3, dim=1)
 
-            for i, layer in enumerate(self.layers):
-                h_prev = hidden[i]
-                h_t = layer(x_t, h_prev)
+                r_t = torch.sigmoid(r_x + r_h)
+                z_t = torch.sigmoid(z_x + z_h)
+                n_t = torch.tanh(n_x + r_t * n_h)
 
-                if i < self.num_layers - 1:
-                    x_t = self.dropout(h_t)
+                h[layer] = (1 - z_t) * n_t + z_t * h[layer]
+
+                if layer < self.num_layers - 1:
+                    layer_input = self.dropout_layer(h[layer])
                 else:
-                    x_t = h_t
+                    layer_input = h[layer]
 
-                new_hidden.append(h_t)
+            outputs.append(h[-1].unsqueeze(1))
 
-            hidden = new_hidden
-            outputs.append(x_t.unsqueeze(1))
+        outputs = torch.cat(outputs, dim=1)
+        h_n = torch.stack(h, dim=0)
 
-        out = torch.cat(outputs, dim=1)
-        return self.fc(out), torch.stack(hidden)
+        if not self.batch_first:
+            outputs = outputs.transpose(0, 1).contiguous()
+
+        return outputs, h_n
 
 
 if __name__ == "__main__":
-    model = GRU(input_dim=10, hidden_dim=20, output_dim=5)
+    model = GRU(input_dim=10, hidden_dim=20, num_layers=1)
     print(model)
+
+    x_dummy = torch.randn(3, 7, 10)  # (batch_size, seq_len, input_dim)
+    output, h_n = model(x_dummy)
+    print("Output shape:", output.shape)
+    print("Any NaNs in output?", torch.isnan(output).any().item())
+    print("Output max abs:", output.abs().max().item())
+    output.mean().backward()
+
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            print(f"{name} grad norm:", param.grad.norm().item())
+        else:
+            print(f"{name} has no grad")

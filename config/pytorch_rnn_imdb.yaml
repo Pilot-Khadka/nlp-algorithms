@@ -16,7 +16,6 @@ model:
   input_dim: 128
   hidden_dim: 256
   num_layers: 2
-  dropout: 0.3
   weight_tying: false
   pytorch: true
   bidirectional: false

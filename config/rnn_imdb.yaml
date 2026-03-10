@@ -1,34 +1,30 @@
+
 dataset:
   name: imdb
   sequence_length: 256
+  vocab_size: 10000
+  # max_samples: 500
   data_dir: data/dataset_imdb/
   url: "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
-
-  tokenizer:
-    name: "whitespace"
-
-  # vectorizer:
-  #   name: "tfidf"
-  #   max_features: 10000
-  #   min_df: 2
+  num_class: 2
 
   use_cache: true
   num_workers: auto
   pin_memory: true
   prefetch_factor: 2
 
+tokenizer:
+  # name: whitespace
+  name: bpe
 
 model:
   name: rnn
-  input_dim: 200
-  hidden_dim: 200
-  num_layers: 1
-  dropout: 0.5
-  bidirectional: false
-  weight_tying: false
+  input_dim: 128
+  hidden_dim: 256
+  num_layers: 2
 
 task:
-  name: sentiment_analysis
+  name: classification
   metrics:
     - accuracy
     - f1_score
@@ -36,8 +32,8 @@ task:
     - recall
 
 train:
-  epochs: 40
-  batch_size: 32
+  epochs: 15
+  batch_size: 64
   multi_gpu: true
-  learning_rate: 1e-4
-  grad_clip: 0.25
+  learning_rate: 1e-3
+  grad_clip: 1.0

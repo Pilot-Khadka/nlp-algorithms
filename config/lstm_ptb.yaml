@@ -20,7 +20,6 @@ model:
   input_dim: 300
   hidden_dim: 650
   num_layers: 2
-  dropout: 0.5
   bidirectional: false
   weight_tying: true
 

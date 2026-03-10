@@ -27,7 +27,6 @@ class BaseTrainer(ABC):
         self.gpu_id = gpu_id
         self.use_ddp = use_ddp
         self.is_main = not use_ddp or gpu_id == 0
-
         self.model = builder.model
         self.optimizer = builder.optimizer
         self.scheduler = builder.scheduler
@@ -36,20 +35,23 @@ class BaseTrainer(ABC):
         self.metrics = builder.metric_names
         self.task = builder.task
         self.criterion = builder.criterion
-
         self.grad_clip = self.config.train.grad_clip
         self.best_valid_loss = float("inf")
+        self._avg_train_time = 0.0
+        self._avg_val_time = 0.0
 
     def train(self) -> None:
-        """Main training loop."""
         for epoch in range(self.config.train.epochs):
             avg_train_loss, train_time = self.train_one_epoch(
                 epoch, self.config.train.epochs
             )
-
             avg_valid_loss, val_time, avg_metrics = self.evaluate_one_epoch(
                 epoch, self.config.train.epochs
             )
+
+            n = epoch + 1
+            self._avg_train_time += (train_time - self._avg_train_time) / n
+            self._avg_val_time += (val_time - self._avg_val_time) / n
 
             if self.scheduler is not None:
                 self.scheduler.step(avg_valid_loss)
@@ -63,7 +65,6 @@ class BaseTrainer(ABC):
                     avg_valid_loss,
                     avg_metrics,
                 )
-
                 if avg_valid_loss < self.best_valid_loss:
                     self.best_valid_loss = avg_valid_loss
 
@@ -73,15 +74,11 @@ class BaseTrainer(ABC):
     def _tqdm_format_metrics(self, metrics: dict, max_items: int = 3) -> str:
         if not metrics:
             return ""
-
         items = list(metrics.items())[:max_items]
-
         parts = [f"{k}={v:.4f}" for k, v in items]
         result = " | ".join(parts)
-
         if len(result) > 45:
             result = result[:42] + "..."
-
         return result
 
     def _log_epoch_results(
@@ -96,10 +93,10 @@ class BaseTrainer(ABC):
         metrics_str = ", ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
         self.logger.info(
             f"Epoch {epoch + 1}: "
-            f"Train Loss: {train_loss:.4f}, "
-            f"Train time: {train_time:.4f}, "
-            f"Valid Loss: {valid_loss:.4f}, "
-            f"Valid time: {val_time:.4f}, "
+            f"Train Loss: {train_loss:.4f} | "
+            f"Train time: {train_time:.2f}s (avg: {self._avg_train_time:.2f}s) | "
+            f"Valid Loss: {valid_loss:.4f} | "
+            f"Valid time: {val_time:.2f}s (avg: {self._avg_val_time:.2f}s) | "
             f"{metrics_str}"
         )
 

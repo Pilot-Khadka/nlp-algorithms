@@ -87,12 +87,16 @@ class ModelFactory:
             )
 
         if len(model_variants) > 1 and not model_flags:
-            if frozenset({"unidirectional"}) in model_variants:
+            model_entry = MODEL_REGISTRY[model_config.name]
+            if "default" in model_entry:
+                pass
+            elif frozenset({"unidirectional"}) in model_variants:
                 model_flags = ["unidirectional"]
             else:
-                default_variant = list(model_variants.keys())[0]
-                model_flags = list(default_variant)
-                warnings.warn(f"No variant flag specified, defaulting to {model_flags}")
+                raise ValueError(
+                    f"Model '{model_config.name}' has multiple variants {[set(k) for k in model_variants.keys()]} "
+                    f"but no flag was specified. Please provide one of the variant flags."
+                )
 
         model_class = get_from_registry(
             MODEL_REGISTRY, model_config.name, flags=model_flags
@@ -123,6 +127,10 @@ class ModelFactory:
 
         if task_config.name == "classification":
             num_classes = data_config.num_class
-            return ClassificationModel(embedding, encoder, num_classes=num_classes)
+            return ClassificationModel(
+                embedding=embedding,
+                encoder=encoder,
+                num_classes=num_classes,
+            )
 
         raise ValueError(f"Unsupported task: {task_config.name}")
