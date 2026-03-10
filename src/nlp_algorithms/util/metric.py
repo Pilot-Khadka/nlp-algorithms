@@ -1,10 +1,8 @@
-from typing import Dict, List, Optional, Any, TypedDict
+from typing import TypedDict
 
 
 import torch
 from torch import Tensor
-
-from collections import defaultdict
 
 
 class MetricContext(TypedDict):
@@ -13,94 +11,6 @@ class MetricContext(TypedDict):
     predictions: Tensor
     targets: Tensor
     tokens: int
-
-
-class MetricsTracker:
-    def __init__(self, metric_names: List[str]):
-        self.metric_names = metric_names
-        self.reset()
-
-    def reset(self) -> None:
-        self.batch_metrics: List[Dict[str, float]] = []
-        self.accumulated = defaultdict(float)
-        self.token_accumulated = 0
-
-    def update(self, metrics: Dict[str, float]) -> None:
-        """
-        Expected metrics dict may contain:
-            loss   -> mean loss for this batch
-            tokens -> number of tokens used for this loss
-            anything else -> batch-mean metrics
-        """
-
-        self.batch_metrics.append(metrics)
-
-        if "loss" in metrics:
-            if "tokens" not in metrics:
-                raise ValueError(
-                    "MetricsTracker.update requires 'tokens' when 'loss' is provided."
-                )
-
-            loss = metrics["loss"]
-            tokens = metrics["tokens"]
-
-            if isinstance(loss, Tensor):
-                loss = loss.item()
-
-            self.accumulated["loss"] += loss * tokens
-            # pyrefly: ignore [bad-assignment]
-            self.token_accumulated += tokens
-
-        for name, value in metrics.items():
-            if name in ("loss", "tokens"):
-                continue
-
-            if isinstance(value, Tensor):
-                value = value.item()
-
-            self.accumulated[name] += value
-            self.accumulated[name + "_count"] += 1
-
-    def get_averages(self) -> Dict[str, float]:
-        averages = {}
-
-        if self.token_accumulated > 0:
-            averages["loss"] = self.accumulated["loss"] / self.token_accumulated
-
-        for key in list(self.accumulated.keys()):
-            if key.endswith("_count"):
-                name = key.replace("_count", "")
-                count = self.accumulated[key]
-                if count > 0:
-                    averages[name] = self.accumulated[name] / count
-
-        return averages
-
-    def get_current_batch_metrics(self) -> Dict[str, float]:
-        return self.batch_metrics[-1] if self.batch_metrics else {}
-
-    def format_metrics(
-        self, metrics: Optional[Dict[str, float]] = None, prefix: str = ""
-    ) -> str:
-        if metrics is None:
-            metrics = self.get_averages()
-
-        if not metrics:
-            return f"{prefix}No metrics available"
-
-        formatted = [f"{name}\t{value:.4f}" for name, value in sorted(metrics.items())]
-        result = "\t".join(formatted)
-        return f"{prefix}{result}" if prefix else result
-
-    def print_summary(self, epoch: int, phase: str = "Valid") -> None:
-        averages = self.get_averages()
-        print("\n" + "-" * 70)
-        print(f"Epoch {epoch} [{phase}] Metrics")
-        print("-" * 70)
-        print(self.format_metrics(averages))
-
-    def get_metric(self, metric_name: str) -> Optional[float]:
-        return self.get_averages().get(metric_name)
 
 
 def perplexity(context):
@@ -118,55 +28,44 @@ def ppl_to_loss_ratio(outputs, targets, computed_metrics=None):
     return None
 
 
-def accuracy(context: MetricContext) -> float:
-    predictions = context.get("predictions")
-    targets = context.get("targets")
-
+def accuracy(predictions: torch.Tensor, targets: torch.Tensor) -> float:
     correct = (predictions == targets).sum().item()
-    total = targets.size(0)
+    total = targets.numel()
     return correct / total if total > 0 else 0.0
 
 
-def precision(context: MetricContext) -> float:
-    """description: macro-aveeraged"""
-
-    predictions = context.get("predictions")
-    targets = context.get("targets")
-
-    classes = torch.unique(targets)
+def precision(
+    predictions: torch.Tensor, targets: torch.Tensor, num_classes: int
+) -> float:
+    """Macro precision across all classes."""
     precisions = []
-
-    for c in classes:
+    for c in range(num_classes):
         tp = ((predictions == c) & (targets == c)).sum().item()
         pred_pos = (predictions == c).sum().item()
+        prec = tp / pred_pos if pred_pos > 0 else 0.0
+        precisions.append(prec)
 
-        if pred_pos > 0:
-            precisions.append(tp / pred_pos)
-
-    return float(sum(precisions) / len(precisions)) if precisions else 0.0
+    return sum(precisions) / num_classes if num_classes > 0 else 0.0
 
 
-def recall(context: MetricContext) -> float:
-    """macro-aveeraged"""
-    predictions = context.get("predictions")
-    targets = context.get("targets")
-
-    classes = torch.unique(targets)
+def recall(predictions: torch.Tensor, targets: torch.Tensor, num_classes: int) -> float:
+    """Macro recall across all classes."""
     recalls = []
-
-    for c in classes:
+    for c in range(num_classes):
         tp = ((predictions == c) & (targets == c)).sum().item()
         actual_pos = (targets == c).sum().item()
+        rec = tp / actual_pos if actual_pos > 0 else 0.0
+        recalls.append(rec)
 
-        if actual_pos > 0:
-            recalls.append(tp / actual_pos)
-
-    return float(sum(recalls) / len(recalls)) if recalls else 0.0
+    return sum(recalls) / num_classes if num_classes > 0 else 0.0
 
 
-def f1_score(context) -> float:
-    prec = precision(context)
-    rec = recall(context)
+def f1_score(
+    predictions: torch.Tensor, targets: torch.Tensor, num_classes: int
+) -> float:
+    """Macro F1 (computed from macro P/R)."""
+    prec = precision(predictions, targets, num_classes)
+    rec = recall(predictions, targets, num_classes)
 
     if prec + rec == 0:
         return 0.0

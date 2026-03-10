@@ -13,6 +13,7 @@ checkpoint*
 core_lemmatization/wordnet_data*
 core_vectorization/word2vec*
 data/
+progress.txt
 
 
 

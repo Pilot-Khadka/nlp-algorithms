@@ -8,7 +8,6 @@ from abc import ABC, abstractmethod
 import torch
 import torch.distributed as dist
 
-from nlp_algorithms.util.metric import MetricsTracker
 from nlp_algorithms.util.logger import setup_logging
 
 
@@ -34,10 +33,9 @@ class BaseTrainer(ABC):
         self.scheduler = builder.scheduler
         self.train_loader = builder.train_loader
         self.test_loader = builder.test_loader
+        self.metrics = builder.metric_names
         self.task = builder.task
         self.criterion = builder.criterion
-
-        self.metrics_tracker = MetricsTracker(builder.metric_names)
 
         self.grad_clip = self.config.train.grad_clip
         self.best_valid_loss = float("inf")
@@ -45,9 +43,11 @@ class BaseTrainer(ABC):
     def train(self) -> None:
         """Main training loop."""
         for epoch in range(self.config.train.epochs):
-            avg_train_loss = self.train_one_epoch(epoch, self.config.train.epochs)
+            avg_train_loss, train_time = self.train_one_epoch(
+                epoch, self.config.train.epochs
+            )
 
-            avg_valid_loss, avg_metrics = self.evaluate_one_epoch(
+            avg_valid_loss, val_time, avg_metrics = self.evaluate_one_epoch(
                 epoch, self.config.train.epochs
             )
 
@@ -56,7 +56,12 @@ class BaseTrainer(ABC):
 
             if self.is_main:
                 self._log_epoch_results(
-                    epoch, avg_train_loss, avg_valid_loss, avg_metrics
+                    epoch,
+                    avg_train_loss,
+                    train_time,
+                    val_time,
+                    avg_valid_loss,
+                    avg_metrics,
                 )
 
                 if avg_valid_loss < self.best_valid_loss:
@@ -80,26 +85,30 @@ class BaseTrainer(ABC):
         return result
 
     def _log_epoch_results(
-        self, epoch: int, train_loss: float, valid_loss: float, metrics: dict
+        self,
+        epoch: int,
+        train_loss: float,
+        train_time: float,
+        val_time: float,
+        valid_loss: float,
+        metrics: dict,
     ) -> None:
         metrics_str = ", ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
         self.logger.info(
             f"Epoch {epoch + 1}: "
             f"Train Loss: {train_loss:.4f}, "
+            f"Train time: {train_time:.4f}, "
             f"Valid Loss: {valid_loss:.4f}, "
+            f"Valid time: {val_time:.4f}, "
             f"{metrics_str}"
         )
 
-        print("\n" + "-" * 70)
-        print(f"Epoch {epoch + 1} [Validation] Metrics")
-        print("-" * 70)
-        print(self.metrics_tracker.format_metrics(metrics))
-        print("-" * 70)
-
     @abstractmethod
-    def train_one_epoch(self, epoch: int, total_epochs: int) -> float:
+    def train_one_epoch(self, epoch: int, total_epochs: int) -> tuple[float, float]:
         pass
 
     @abstractmethod
-    def evaluate_one_epoch(self, epoch: int, total_epochs: int) -> tuple[float, dict]:
+    def evaluate_one_epoch(
+        self, epoch: int, total_epochs: int
+    ) -> tuple[float, float, dict]:
         pass

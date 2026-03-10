@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.scripts]
-nlp-algorithms = "nlp_algorithms:main"
+nlp-algorithms = "nlp_algorithms:train"
 
 [build-system]
 requires = ["hatchling"]

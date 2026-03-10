@@ -1,19 +1,21 @@
 from typing import Union, Any, Tuple, Dict, cast
 
+import time
 from tqdm import tqdm
 
 import torch
 import torch.distributed as dist
 
-import nlp_algorithms.util.metric as classification_metrics
-from nlp_algorithms.training.base import BaseTrainer
+from .base import BaseTrainer
+from nlp_algorithms.util.metric import accuracy, precision, recall, f1_score
 from nlp_algorithms.engine.registry import register_trainer
 
 
 @register_trainer("classification")
 class ClassificationTrainer(BaseTrainer):
-    def train_one_epoch(self, epoch, total_epochs) -> float:
+    def train_one_epoch(self, epoch, total_epochs) -> tuple[float, float]:
         self.model.train()
+        start_time = time.perf_counter()
 
         if self.use_ddp:
             if hasattr(self.train_loader, "sampler") and hasattr(
@@ -27,12 +29,16 @@ class ClassificationTrainer(BaseTrainer):
 
         train_progress: Union[Any, tqdm]
         if self.is_main:
-            train_progress = tqdm(
-                self.train_loader,
-                desc=f"Epoch {epoch + 1}/{total_epochs} [Train]",
-                leave=False,
-                ncols=120,
-            )
+            if self.config.show_progress:
+                train_progress = tqdm(
+                    self.train_loader,
+                    desc=f"Epoch {epoch + 1}/{total_epochs} [Train]",
+                    leave=False,
+                    ncols=120,
+                )
+            else:
+                print(f"Training epoch {epoch + 1}/{total_epochs}...")
+                train_progress = self.train_loader
         else:
             train_progress = self.train_loader
 
@@ -74,7 +80,11 @@ class ClassificationTrainer(BaseTrainer):
             total_samples += batch_size
             correct_predictions += correct
 
-            if self.is_main and hasattr(train_progress, "set_postfix"):
+            if (
+                self.is_main
+                and self.config.show_progress
+                and hasattr(train_progress, "set_postfix")
+            ):
                 avg_loss = total_train_loss / total_samples
                 avg_acc = correct_predictions / total_samples
                 short_metrics = self._tqdm_format_metrics(
@@ -91,26 +101,32 @@ class ClassificationTrainer(BaseTrainer):
             dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
             avg_train_loss = (loss_tensor[0] / loss_tensor[1]).item()
 
-        return avg_train_loss
+        train_time = time.perf_counter() - start_time
+
+        return avg_train_loss, train_time
 
     def evaluate_one_epoch(
         self,
         epoch,
         total_epochs,
-    ) -> Tuple[float, Dict[str, float]]:
+    ) -> Tuple[float, float, Dict[str, float]]:
         self.model.eval()
+        start_time = time.perf_counter()
 
         total_valid_loss = 0.0
         total_samples = 0
-        self.metrics_tracker.reset()
 
         valid_progress: Union[Any, tqdm]
         if self.is_main:
-            valid_progress = tqdm(
-                self.test_loader,
-                desc=f"Epoch {epoch + 1}/{total_epochs} [Valid]",
-                leave=False,
-            )
+            if self.config.show_progress:
+                valid_progress = tqdm(
+                    self.test_loader,
+                    desc=f"Epoch {epoch + 1}/{total_epochs} [Valid]",
+                    leave=False,
+                )
+            else:
+                print(f"Evaluating epoch {epoch + 1}/{total_epochs}...")
+                valid_progress = self.test_loader
         else:
             valid_progress = self.test_loader
 
@@ -148,7 +164,11 @@ class ClassificationTrainer(BaseTrainer):
                 all_predictions.append(preds.detach().cpu())
                 all_targets.append(labels.detach().cpu())
 
-                if self.is_main and hasattr(valid_progress, "set_postfix"):
+                if (
+                    self.is_main
+                    and self.config.show_progress
+                    and hasattr(valid_progress, "set_postfix")
+                ):
                     avg_loss = total_valid_loss / total_samples
                     short_metrics = self._tqdm_format_metrics(
                         {"ValLoss": loss_value, "AvgValLoss": avg_loss}
@@ -186,16 +206,15 @@ class ClassificationTrainer(BaseTrainer):
             all_predictions = torch.cat(preds_list, dim=0)
             all_targets = torch.cat(targets_list, dim=0)
 
-        context = {
-            "loss": avg_valid_loss,
-            "predictions": all_predictions.cpu(),
-            "targets": all_targets.cpu(),
+        preds = all_predictions.cpu()
+        tgts = all_targets.cpu()
+        num_classes = self.config.dataset.num_class
+        avg_metrics = {
+            "accuracy": accuracy(preds, tgts),
+            "precision": precision(preds, tgts, num_classes),
+            "recall": recall(preds, tgts, num_classes),
+            "f1": f1_score(preds, tgts, num_classes),
         }
 
-        avg_metrics = {"loss": avg_valid_loss}
-        for name in self.metrics_tracker.metric_names:
-            if hasattr(classification_metrics, name):
-                avg_metrics[name] = getattr(classification_metrics, name)(context)
-
-        self.metrics_tracker.update(avg_metrics)
-        return avg_valid_loss, avg_metrics
+        val_time = time.perf_counter() - start_time
+        return avg_valid_loss, val_time, avg_metrics

@@ -55,7 +55,12 @@ class ClassificationModel(nn.Module):
 
 class ModelFactory:
     @staticmethod
-    def create_model(model_config, dataset_bundle, task_config, data_config):
+    def create_model(
+        model_config,
+        dataset_bundle,
+        task_config,
+        data_config,
+    ):
         task = get_from_registry(TASK_REGISTRY, task_config.name)
         all_flags = [k for k, v in model_config.items() if isinstance(v, bool) and v]
         model_variants = MODEL_REGISTRY[model_config.name].get("variants", {})

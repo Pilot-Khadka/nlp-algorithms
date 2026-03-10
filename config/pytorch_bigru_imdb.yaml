@@ -1,29 +1,28 @@
 dataset:
   name: imdb
-  num_class: 2
-  sequence_length: 512
+  sequence_length: 256
   vocab_size: 10000
   data_dir: data/dataset_imdb/
   url: "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
+  num_class: 2
+  
   use_cache: true
   num_workers: auto
   pin_memory: true
   prefetch_factor: 2
 
+tokenizer:
+  name: bpe
 
 model:
-  name: rnn
+  name: gru
   input_dim: 128
   hidden_dim: 256
   num_layers: 2
   dropout: 0.3
+  bidirectional: true
   weight_tying: false
   pytorch: true
-  bidirectional: false
-
-tokenizer:
-  name: bpe
-
 
 task:
   name: classification

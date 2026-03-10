@@ -1,1 +1,2 @@
-from .lstm import LSTM
+from . import lstm
+from . import pytorch_lstm

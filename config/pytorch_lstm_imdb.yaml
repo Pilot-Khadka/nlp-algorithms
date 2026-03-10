@@ -1,10 +1,10 @@
 dataset:
   name: imdb
+  num_class: 2
   sequence_length: 512
   vocab_size: 10000
   data_dir: data/dataset_imdb/
   url: "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
-
   use_cache: true
   num_workers: auto
   pin_memory: true
@@ -16,10 +16,10 @@ model:
   input_dim: 128
   hidden_dim: 256
   num_layers: 2
-  dropout: 0.5
+  dropout: 0.3
   weight_tying: false
   pytorch: true
-  unidirectional: true
+  bidirectional: false
 
 tokenizer:
   name: bpe
