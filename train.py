@@ -10,14 +10,14 @@ def main():
         "--path", type=str, required=True, help="Path to the config YAML file."
     )
     parser.add_argument(
-        "--show_progress",
+        "--verbose",
         action="store_true",
         help="If set, show training and validation progress bars.",
     )
     args = parser.parse_args()
 
     config = load_config(path=args.path)
-    config.show_progress = args.show_progress
+    config.show_progress = args.verbose
     run_training(config)
 
 
