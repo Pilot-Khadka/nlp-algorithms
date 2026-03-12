@@ -18,10 +18,8 @@ tokenizer:
 model:
   name: awd-lstm
   input_dim: 300
-  hidden_dim: 650
-  num_layers: 2
-  bidirectional: false
-  weight_tying: true
+  hidden_dim: 300
+  num_layers: 1
   pytorch: true
 
 train:

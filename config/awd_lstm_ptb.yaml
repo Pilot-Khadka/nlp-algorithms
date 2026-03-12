@@ -7,10 +7,10 @@ dataset:
   valid_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.valid.txt"
   test_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.test.txt"
 
-  use_cache: true          # Cache encoded tensors to disk
-  num_workers: auto        # Set to integer or "auto" (cpu_count - 2)
-  pin_memory: true         # Pin memory for faster GPU transfer
-  prefetch_factor: 2       # Number of batches to prefetch per worker
+  use_cache: true
+  num_workers: auto
+  pin_memory: true
+  prefetch_factor: 2
 
 tokenizer:
   name: bpe
@@ -20,8 +20,7 @@ model:
   input_dim: 300
   hidden_dim: 650
   num_layers: 2
-  bidirectional: false
-  weight_tying: true
+  weight_tying: false # requires input and hidden dim both to be same
 
 train:
   epochs: 15

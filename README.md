@@ -51,14 +51,13 @@ Comparison between custom model implementation and PyTorch equivalents
 | **BiLSTM** |Custom          | 0.0203     | 365.49s          | 1.1990     | 88.54s           | 0.7948   | 0.7951    | 0.7948 | 0.7949 |
 | **LSTM**   |Pytorch         | 0.0540     | 19.41s           | 1.1087     | 7.28s            | 0.7839   | 0.7840    | 0.7839 | 0.7840 |
 | **LSTM**   |Custom          | 0.0266     | 176.13s          | 1.5475     | 48.30s           | 0.7376   | 0.7377    | 0.7376 | 0.7377 |
-
----
-
+| **QRNN**     | Custom         | 0.0106     | 110.53s          | 1.7951     | 15.72s           | 0.7281   | 0.7290    | 0.7281 | 0.7286 |
+| **AWD-LSTM** | Custom         | 0.0806     | 292.92s          | 0.8338     | 45.44s           | 0.8020   | 0.8028    | 0.8020 | 0.8024 |
 
 **Notes**
 
-- **PyTorch implementations are ~8–10× faster** due to optimized CUDA kernels and fused operations.
-- RNN / BiRNN models were excluded since they converge to ~50% accuracy (random).
+- **PyTorch implementations are ~8-10x faster** due to optimized CUDA kernels and fused operations.
+- RNN / BiRNN models for both custom and pytorch were excluded since they converged to ~50% accuracy (random).
 
 ## roadmap
 - [ ] training seq-2-seq model on machine translation
