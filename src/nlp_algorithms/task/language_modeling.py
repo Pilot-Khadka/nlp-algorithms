@@ -1,10 +1,12 @@
+import torch.nn as nn
+
 from .base import BaseTask
 from nlp_algorithms.engine.registry import register_task
 
 
 @register_task("language_modeling")
 class LMTask(BaseTask):
-    allowed_flags = {"unidirectional", "causal", "weight_tying"}
+    allowed_flags = {"pytorch", "causal", "weight_tying"}
 
     @staticmethod
     def get_output_dim(dataset_bundle):
@@ -12,9 +14,7 @@ class LMTask(BaseTask):
 
     @staticmethod
     def get_loss(pad_idx=0):
-        import torch.nn as nn
-
-        return nn.CrossEntropyLoss(ignore_index=pad_idx, reduction="sum")
+        return nn.CrossEntropyLoss(ignore_index=pad_idx)
 
     def postprocess(self, outputs):
         raise NotImplementedError()

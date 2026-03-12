@@ -1,4 +1,4 @@
-from typing import Union, Any, Tuple, Dict, cast
+from typing import Union, Any, cast
 
 import time
 from tqdm import tqdm
@@ -104,7 +104,7 @@ class ClassificationTrainer(BaseTrainer):
         self,
         epoch,
         total_epochs,
-    ) -> Tuple[float, float, Dict[str, float]]:
+    ) -> tuple[float, float, dict[str, float]]:
         self.model.eval()
         start_time = time.perf_counter()
 

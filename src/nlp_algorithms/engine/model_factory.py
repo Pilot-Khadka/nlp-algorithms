@@ -1,4 +1,3 @@
-import warnings
 import torch.nn as nn
 
 from nlp_algorithms.engine.registry import (
@@ -13,21 +12,26 @@ class LanguageModel(nn.Module):
     def __init__(self, embedding, encoder, tie_weights=False):
         super().__init__()
         self.embedding = embedding
+        # lstm, rnn, gru, etc
         self.encoder = encoder
 
-        if not tie_weights:
-            self.lm_head = nn.Linear(encoder.hidden_size, embedding.num_embeddings)
-        else:
-            # pyrefly: ignore [bad-assignment]
-            self.lm_head = None
+        hidden_size = encoder.hidden_dim
+        vocab_size = embedding.num_embeddings
+        emb_dim = embedding.embedding_dim
 
-    def forward(self, input_ids):
+        self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
+
+        if tie_weights:
+            if hidden_size != emb_dim:
+                raise ValueError(
+                    f"Cannot tie weights: hidden_size={hidden_size} "
+                    f"!= embedding_dim={emb_dim}"
+                )
+            self.lm_head.weight = self.embedding.weight
+
+    def forward(self, input_ids, *args, **kwargs):
         emb = self.embedding(input_ids)
-        outputs, hidden = self.encoder(emb)
-
-        if self.lm_head is None:
-            return outputs, hidden
-
+        outputs, hidden = self.encoder(emb, *args, **kwargs)
         logits = self.lm_head(outputs)
         return logits, hidden
 
@@ -103,7 +107,6 @@ class ModelFactory:
         )
 
         embedding = EmbeddingFactory.create(model_config, dataset_bundle.vocab)
-        output_dim = task.get_output_dim(dataset_bundle)
 
         # Variant flags drive class selection in the registry, so they are not
         # forwarded as constructor kwargs, the selected class already encodes that
@@ -118,12 +121,9 @@ class ModelFactory:
 
         encoder = model_class(**explicit_kwargs, **encoder_kwargs)
 
+        weight_tying = model_config.get("weight_tying", False)
         if task_config.name == "language_modeling":
-            return LanguageModel(
-                embedding,
-                encoder,
-                tie_weights=model_config.weight_tying,
-            )
+            return LanguageModel(embedding, encoder, tie_weights=weight_tying)
 
         if task_config.name == "classification":
             num_classes = data_config.num_class

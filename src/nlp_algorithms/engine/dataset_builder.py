@@ -186,10 +186,40 @@ class DatasetBundleBuilder:
         data_reader_cls = get_from_registry(DATA_READER_REGISTRY, config.dataset.name)
 
         max_samples = config.dataset.get("max_samples", None)
+
         train = data_reader_cls(
-            data_dir=data_dir, split="train", max_samples=max_samples
+            data_dir=data_dir,
+            split="train",
+            max_samples=max_samples,
         )
-        test = data_reader_cls(data_dir=data_dir, split="test", max_samples=max_samples)
+
+        available_splits = set(os.listdir(data_dir))
+
+        has_valid = "valid" in available_splits or "validation" in available_splits
+        has_test = "test" in available_splits
+
+        if has_valid:
+            valid = data_reader_cls(
+                data_dir=data_dir,
+                split="valid",
+                max_samples=max_samples,
+            )
+        else:
+            valid = data_reader_cls(
+                data_dir=data_dir,
+                split="test",
+                max_samples=max_samples,
+            )
+
+        if has_test:
+            test = data_reader_cls(
+                data_dir=data_dir,
+                split="test",
+                max_samples=max_samples,
+            )
+        else:
+            # fallback to valid (rare but symmetric)
+            test = valid
 
         tokenizer_cls = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
 
@@ -210,6 +240,7 @@ class DatasetBundleBuilder:
         src_vocab = None
         tgt_vocab = None
 
+        # vocabulary build logic
         if config.task.name in {"classification", "ner"}:
             token_vocab = build_vocab_from_key(
                 train,
@@ -245,7 +276,7 @@ class DatasetBundleBuilder:
 
         return DatasetBundle(
             train_dataset=train,
-            val_dataset=test,
+            val_dataset=valid,
             test_dataset=test,
             token_vocab=token_vocab,
             label_vocab=label_vocab,

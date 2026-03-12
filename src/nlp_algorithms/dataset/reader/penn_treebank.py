@@ -8,7 +8,12 @@ from nlp_algorithms.engine.registry import register_reader
 
 @register_reader("ptb")
 class PTBDataset(Dataset):
-    def __init__(self, data_dir: str, split: str):
+    def __init__(
+        self,
+        data_dir: str,
+        split: str,
+        **kwargs,
+    ):
         self.data_dir = data_dir
         self.split = split
 

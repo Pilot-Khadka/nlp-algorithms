@@ -1,6 +1,6 @@
 from typing import TypedDict
 
-
+import math
 import torch
 from torch import Tensor
 
@@ -13,19 +13,10 @@ class MetricContext(TypedDict):
     tokens: int
 
 
-def perplexity(context):
-    loss = context["loss"]
-    return float(torch.exp(torch.tensor(loss)))
-
-
-def ppl_to_loss_ratio(outputs, targets, computed_metrics=None):
-    if (
-        computed_metrics
-        and "perplexity" in computed_metrics
-        and "loss" in computed_metrics
-    ):
-        return computed_metrics["perplexity"] / computed_metrics["loss"]
-    return None
+def perplexity(loss):
+    if isinstance(loss, torch.Tensor):
+        loss = loss.detach().item()
+    return math.exp(loss)
 
 
 def accuracy(predictions: torch.Tensor, targets: torch.Tensor) -> float:
@@ -35,7 +26,9 @@ def accuracy(predictions: torch.Tensor, targets: torch.Tensor) -> float:
 
 
 def precision(
-    predictions: torch.Tensor, targets: torch.Tensor, num_classes: int
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    num_classes: int,
 ) -> float:
     """Macro precision across all classes."""
     precisions = []

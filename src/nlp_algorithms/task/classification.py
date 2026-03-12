@@ -1,3 +1,5 @@
+import torch.nn as nn
+
 from .base import BaseTask
 
 from nlp_algorithms.engine.registry import register_task
@@ -13,8 +15,6 @@ class ClassificationTask(BaseTask):
 
     @staticmethod
     def get_loss():
-        import torch.nn as nn
-
         return nn.CrossEntropyLoss()
 
     def postprocess(self, outputs):
