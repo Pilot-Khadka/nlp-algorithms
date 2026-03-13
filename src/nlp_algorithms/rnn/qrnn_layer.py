@@ -14,6 +14,8 @@ recurrent pooling:
 import torch
 import torch.nn as nn
 
+from nlp_algorithms.lstm.locked_dropout import LockedDropout
+
 
 class QRNNLayer(nn.Module):
     def __init__(
@@ -21,6 +23,7 @@ class QRNNLayer(nn.Module):
         input_dim: int,
         hidden_dim: int,
         kernel_size: int,
+        hidden_dropout: float = 0.0,
     ):
         super(QRNNLayer, self).__init__()
         self.hidden_dim = hidden_dim
@@ -31,6 +34,7 @@ class QRNNLayer(nn.Module):
             kernel_size=kernel_size,
             padding=kernel_size - 1,
         )
+        self.hidden_dropout = LockedDropout(p=hidden_dropout)
 
     def forward(self, x, hidden=None):
         """
@@ -68,6 +72,7 @@ class QRNNLayer(nn.Module):
             f_t = F[:, t, :]
             o_t = O[:, t, :]
 
+            c_prev = self.hidden_dropout(c_prev)
             # c_t = f_t * c_{t−1} + (1−f_t) * z_t
             c_t = f_t * c_prev + (1 - f_t) * z_t
 

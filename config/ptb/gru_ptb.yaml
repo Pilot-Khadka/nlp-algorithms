@@ -23,13 +23,13 @@ model:
   weight_tying: false # requires input and hidden dim both to be same
 
 train:
-  epochs: 200
+  epochs: 60
   batch_size: 128
   multi_gpu: true
   optimizer: adam
   learning_rate: 0.002
   lr_decay: 0.25
-  grad_clip: 0.25
+  grad_clip: 1.0
   weight_decay: 1.2e-6
 
 task:

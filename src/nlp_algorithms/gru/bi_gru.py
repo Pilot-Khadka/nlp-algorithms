@@ -24,7 +24,9 @@ class BiGRU(nn.Module):
         self.num_layers = num_layers
         self.batch_first = batch_first
 
-        self.dropout_layer = nn.Dropout(p=dropout)
+        self.dropout_layers = nn.ModuleList(
+            [nn.Dropout(dropout) for _ in range(num_layers - 1)]
+        )
 
         self.gates_forward_x = nn.ModuleList()
         self.gates_forward_h = nn.ModuleList()
@@ -120,7 +122,7 @@ class BiGRU(nn.Module):
             # )
 
             if layer < self.num_layers - 1:
-                layer_input = self.dropout_layer(outputs)
+                layer_input = self.dropout_layers[layer](outputs)
             else:
                 layer_input = outputs
 

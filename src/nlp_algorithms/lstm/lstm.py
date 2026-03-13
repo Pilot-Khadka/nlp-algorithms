@@ -16,6 +16,7 @@ class LSTM(nn.Module):
         num_layers,
         batch_first=True,
         dropout=0.0,
+        use_locked_dropout: bool = False,
         proj_size=None,
         **kwargs,
     ):
@@ -23,9 +24,13 @@ class LSTM(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.batch_first = batch_first
+        self.use_locked_dropout = use_locked_dropout
+        self.dropout_p = dropout
 
         self.proj_size = proj_size if proj_size is not None else hidden_dim
-        self.dropout_layer = nn.Dropout(p=dropout)
+        self.dropout_layers = nn.ModuleList(
+            [nn.Dropout(dropout) for _ in range(num_layers - 1)]
+        )
 
         self.gates_forward_x = nn.ModuleList()
         self.gates_forward_h = nn.ModuleList()
@@ -87,10 +92,11 @@ class LSTM(nn.Module):
                 c[layer] = f_t * c[layer] + i_t * g_t
                 raw_h_t = o_t * torch.tanh(c[layer])
 
-                h[layer] = self.proj_layers[layer](raw_h_t)
+                h_t = self.proj_layers[layer](raw_h_t)
+                h[layer] = h_t
 
                 if layer < self.num_layers - 1:
-                    layer_input = self.dropout_layer(h[layer])
+                    layer_input = self.dropout_layers[layer](h_t)
                 else:
                     layer_input = h[layer]
 

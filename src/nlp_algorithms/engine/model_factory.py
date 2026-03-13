@@ -1,4 +1,6 @@
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from nlp_algorithms.engine.registry import (
     MODEL_REGISTRY,
@@ -8,19 +10,65 @@ from nlp_algorithms.engine.registry import (
 from nlp_algorithms.engine.embedding_factory import EmbeddingFactory
 
 
-class LanguageModel(nn.Module):
-    def __init__(self, embedding, encoder, tie_weights=False):
+class EmbeddingDropout(nn.Module):
+    def __init__(self, embedding: nn.Embedding, p: float = 0.1):
         super().__init__()
         self.embedding = embedding
+        self.p = p
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.training or self.p == 0:
+            return self.embedding(x)
+        vocab_size = self.embedding.weight.size(0)
+        row_mask = self.embedding.weight.new_empty(vocab_size, 1).bernoulli_(
+            1 - self.p
+        ) / (1 - self.p)
+        masked_weight = self.embedding.weight * row_mask
+        return F.embedding(
+            x,
+            masked_weight,
+            self.embedding.padding_idx,
+            self.embedding.max_norm,
+            self.embedding.norm_type,
+            self.embedding.scale_grad_by_freq,
+            self.embedding.sparse,
+        )
+
+
+class WordDropout(nn.Module):
+    def __init__(self, p: float = 0.1):
+        super().__init__()
+        self.p = p
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.training or self.p == 0:
+            return x
+
+        mask = x.new_empty(x.size(0), x.size(1), 1).bernoulli_(1 - self.p)
+        return x * mask
+
+
+class LanguageModel(nn.Module):
+    def __init__(
+        self,
+        embedding,
+        encoder,
+        tie_weights: bool = False,
+        embedding_dropout: float = 0.0,
+        word_dropout: float = 0.0,
+    ):
+        super().__init__()
+        self.embedding = embedding
+        self.embedding_dropout = EmbeddingDropout(
+            embedding=embedding, p=embedding_dropout
+        )
+        self.word_dropout = WordDropout(word_dropout)
         # lstm, rnn, gru, etc
         self.encoder = encoder
-
         hidden_size = encoder.hidden_dim
         vocab_size = embedding.num_embeddings
         emb_dim = embedding.embedding_dim
-
         self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
-
         if tie_weights:
             if hidden_size != emb_dim:
                 raise ValueError(
@@ -30,16 +78,27 @@ class LanguageModel(nn.Module):
             self.lm_head.weight = self.embedding.weight
 
     def forward(self, input_ids, *args, **kwargs):
-        emb = self.embedding(input_ids)
+        emb = self.word_dropout(self.embedding_dropout(input_ids))
         outputs, hidden = self.encoder(emb, *args, **kwargs)
         logits = self.lm_head(outputs)
         return logits, hidden
 
 
 class ClassificationModel(nn.Module):
-    def __init__(self, embedding, encoder, num_classes):
+    def __init__(
+        self,
+        embedding,
+        encoder,
+        num_classes,
+        embedding_dropout: float = 0.0,
+        word_dropout: float = 0.0,
+    ):
         super().__init__()
         self.embedding = embedding
+        self.embedding_dropout = EmbeddingDropout(
+            embedding=embedding, p=embedding_dropout
+        )
+        self.word_dropout = WordDropout(word_dropout)
         self.encoder = encoder
 
         bidirectional = getattr(encoder, "bidirectional", False)
@@ -49,7 +108,7 @@ class ClassificationModel(nn.Module):
         self.bidirectional = bidirectional
 
     def forward(self, input_ids):
-        emb = self.embedding(input_ids)
+        emb = self.word_dropout(self.embedding_dropout(input_ids))
         outputs, hidden = self.encoder(emb)
 
         # outputs shape: (B, T, H) or (B, T, 2H) if bidirectional
@@ -122,8 +181,16 @@ class ModelFactory:
         encoder = model_class(**explicit_kwargs, **encoder_kwargs)
 
         weight_tying = model_config.get("weight_tying", False)
+        embedding_dropout = model_config.get("embedding_dropout", 0.0)
+        word_dropout = model_config.get("embedding_word_dropout", 0.0)
         if task_config.name == "language_modeling":
-            return LanguageModel(embedding, encoder, tie_weights=weight_tying)
+            return LanguageModel(
+                embedding=embedding,
+                encoder=encoder,
+                tie_weights=weight_tying,
+                embedding_dropout=embedding_dropout,
+                word_dropout=word_dropout,
+            )
 
         if task_config.name == "classification":
             num_classes = data_config.num_class
@@ -131,6 +198,8 @@ class ModelFactory:
                 embedding=embedding,
                 encoder=encoder,
                 num_classes=num_classes,
+                embedding_dropout=embedding_dropout,
+                word_dropout=word_dropout,
             )
 
         raise ValueError(f"Unsupported task: {task_config.name}")

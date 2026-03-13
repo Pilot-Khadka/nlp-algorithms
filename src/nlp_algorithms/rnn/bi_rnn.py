@@ -21,7 +21,9 @@ class BidirectionalRNN(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.batch_first = batch_first
-        self.dropout_layer = nn.Dropout(p=dropout)
+        self.dropout_layers = nn.ModuleList(
+            [nn.Dropout(p=dropout) for _ in range(num_layers - 1)]
+        )
 
         self.gates_x_fwd = nn.ModuleList()
         self.gates_h_fwd = nn.ModuleList()
@@ -83,7 +85,7 @@ class BidirectionalRNN(nn.Module):
 
             layer_input = torch.cat((fwd_out, bwd_out), dim=2)
             if layer < self.num_layers - 1:
-                layer_input = self.dropout_layer(layer_input)
+                layer_input = self.dropout_layers[layer](layer_input)
 
         outputs = layer_input
         h_n = torch.stack([h for pair in zip(h_fwd, h_bwd) for h in pair], dim=0)

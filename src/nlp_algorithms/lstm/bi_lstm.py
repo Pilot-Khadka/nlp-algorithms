@@ -21,7 +21,9 @@ class BiLSTM(nn.ModuleList):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.batch_first = batch_first
-        self.dropout_layer = nn.Dropout(p=dropout)
+        self.dropout_layers = nn.ModuleList(
+            [nn.Dropout(dropout) for _ in range(num_layers - 1)]
+        )
 
         self.gates_forward_x = nn.ModuleList()
         self.gates_forward_h = nn.ModuleList()
@@ -135,7 +137,9 @@ class BiLSTM(nn.ModuleList):
             c[layer * 2 + 1] = c_b
 
             if layer < self.num_layers - 1:
-                outputs = self.dropout_layer(outputs)
+                layer_input = self.dropout_layers[layer](outputs)
+            else:
+                layer_input = h[layer]
 
         if not self.batch_first:
             outputs = outputs.transpose(0, 1).contiguous()

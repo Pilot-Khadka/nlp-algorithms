@@ -26,6 +26,9 @@ class LanguageModelingTask(BaseTrainer):
             return type(x)(self._detach(v) for v in x)
         return x
 
+    def _unwrap_model(self):
+        return self.model.module if hasattr(self.model, "module") else self.model
+
     def _prepare_forward_kwargs(self, accepts_hidden, hidden):
         kwargs = {}
         if accepts_hidden and hidden is not None:
@@ -33,7 +36,8 @@ class LanguageModelingTask(BaseTrainer):
         return kwargs
 
     def _get_forward_accepts(self):
-        params = inspect.signature(self.model.encoder.forward).parameters
+        model = self._unwrap_model()
+        params = inspect.signature(model.encoder.forward).parameters
         return "hidden" in params
 
     def _create_progress(self, loader, desc):
@@ -174,17 +178,12 @@ class LanguageModelingTask(BaseTrainer):
         with torch.no_grad():
             for inputs, targets in valid_progress:
                 inputs, targets = inputs.to(self.device), targets.to(self.device)
-
-                hidden = self._detach(hidden)  # handles GRU tensor and LSTM (h,c) tuple
+                hidden = self._detach(hidden)
 
                 outputs = self.model(
-                    inputs,
-                    **self._prepare_forward_kwargs(
-                        accepts_hidden, hidden
-                    ),  # correct arity
+                    inputs, **self._prepare_forward_kwargs(accepts_hidden, hidden)
                 )
-
-                logits, hidden = self._unpack_outputs(outputs)  # always a 2-tuple
+                logits, hidden = self._unpack_outputs(outputs)
 
                 if torch.isnan(logits).any() or torch.isinf(logits).any():
                     raise ValueError(
@@ -200,9 +199,6 @@ class LanguageModelingTask(BaseTrainer):
                 total_loss_sum += loss_value * batch_tokens
                 total_tokens += batch_tokens
 
-                all_logits.append(logits.view(-1, logits.size(-1)).detach().cpu())
-                all_targets.append(targets.view(-1).detach().cpu())
-
                 if (
                     self.is_main
                     and self.config.show_progress
@@ -216,21 +212,10 @@ class LanguageModelingTask(BaseTrainer):
                         }
                     )
 
-        all_logits = torch.cat(all_logits, dim=0)
-        all_targets = torch.cat(all_targets, dim=0)
-
         if self.use_ddp:
             t = torch.tensor([total_loss_sum, float(total_tokens)], device=self.device)
             dist.all_reduce(t, op=dist.ReduceOp.SUM)
             total_loss_sum, total_tokens = t.tolist()
-
-            world_size = dist.get_world_size()
-            logits_list = [torch.empty_like(all_logits) for _ in range(world_size)]
-            targets_list = [torch.empty_like(all_targets) for _ in range(world_size)]
-            dist.all_gather(logits_list, all_logits)
-            dist.all_gather(targets_list, all_targets)
-            all_logits = torch.cat(logits_list, dim=0)
-            all_targets = torch.cat(targets_list, dim=0)
 
         avg_loss = total_loss_sum / total_tokens
         avg_metrics = {"perplexity": perplexity(loss=avg_loss)}

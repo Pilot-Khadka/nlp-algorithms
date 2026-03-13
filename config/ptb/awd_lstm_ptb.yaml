@@ -1,6 +1,6 @@
 dataset:
   name: ptb
-  sequence_length: 150
+  sequence_length: 70
   vocab_size: 10000
   data_dir: data/dataset_penn_treebank/
   train_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.train.txt"
@@ -22,12 +22,19 @@ model:
   num_layers: 3
   weight_tying: false # requires input and hidden dim both to be same
 
+  embedding_dropout: 0.1 # dropoute in awd-lstm
+  embedding_word_dropout: 0.4 #dropouti in awd-lstm
+
+  dropout: 0.4 #dropout in awd-lstm
+  hidden_dropout: 0.25 # dropouth in awd-lstm
+
+
 train:
-  epochs: 200
-  batch_size: 128
+  epochs: 60
+  batch_size: 32
   multi_gpu: true
   optimizer: adam
-  learning_rate: 0.002
+  learning_rate: 30.0
   lr_decay: 0.25
   grad_clip: 0.25
   weight_decay: 1.2e-6

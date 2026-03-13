@@ -22,8 +22,9 @@ class GRU(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.batch_first = batch_first
-
-        self.dropout_layer = nn.Dropout(p=dropout)
+        self.dropout_layers = nn.ModuleList(
+            [nn.Dropout(dropout) for _ in range(num_layers - 1)]
+        )
 
         self.gates_forward_x = nn.ModuleList()
         self.gates_forward_h = nn.ModuleList()
@@ -65,7 +66,7 @@ class GRU(nn.Module):
                 h[layer] = (1 - z_t) * n_t + z_t * h[layer]
 
                 if layer < self.num_layers - 1:
-                    layer_input = self.dropout_layer(h[layer])
+                    layer_input = self.dropout_layers[layer](h[layer])
                 else:
                     layer_input = h[layer]
 
