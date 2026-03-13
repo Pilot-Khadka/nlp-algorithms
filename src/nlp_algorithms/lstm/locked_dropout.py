@@ -8,7 +8,7 @@ import torch.nn as nn
 class LockedDropout(nn.Module):
     """Dropout with mask fixed across timesteps within a single forward pass."""
 
-    def __init__(self, p: float = 0.5):
+    def __init__(self, p: float):
         super().__init__()
         self.p = p
         self._mask: Optional[torch.Tensor] = None

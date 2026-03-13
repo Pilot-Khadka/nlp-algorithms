@@ -34,7 +34,7 @@ train:
   batch_size: 32
   multi_gpu: true
   optimizer: adam
-  learning_rate: 30.0
+  learning_rate: 0.003
   lr_decay: 0.25
   grad_clip: 0.25
   weight_decay: 1.2e-6

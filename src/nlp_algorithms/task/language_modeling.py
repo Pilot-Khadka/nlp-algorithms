@@ -6,7 +6,7 @@ from nlp_algorithms.engine.registry import register_task
 
 @register_task("language_modeling")
 class LMTask(BaseTask):
-    allowed_flags = {"pytorch", "causal", "weight_tying"}
+    allowed_flags = {"pytorch", "causal", "weight_tying", "use_locked_dropout"}
 
     @staticmethod
     def get_output_dim(dataset_bundle):

@@ -59,6 +59,13 @@ Comparison between custom model implementation and PyTorch equivalents
 - **PyTorch implementations are ~8-10x faster** due to optimized CUDA kernels and fused operations.
 - RNN / BiRNN models for both custom and pytorch were excluded since they converged to ~50% accuracy (random).
 
+### language modeling (penn treebank)
+
+| Model                | Implementation               | Config                                                   | Epoch         | Test Perplexity | Train Time / Epoch |
+| -------------------- | ---------------------------- | ------------------------------------------------------------------- | ------------- | --------------- | ------------------ |
+| **AWD-LSTM**         | Official (no finetuning)     | BS=20, SeqLen=70, Dropouti=0.4, Dropouth=0.25                       | up to 500     | **58.8**        | **65s**            |
+| **AWD-LSTM**         | Custom                       | BS=32, SeqLen=70, Dropouti=0.4, Dropouth=0.25, 3-layer, 1000 hidden | 60            | *86.42*           | **156s**           |
+
 ## roadmap
 - [ ] training seq-2-seq model on machine translation
 - [ ] benchmarking against pytorch/official models

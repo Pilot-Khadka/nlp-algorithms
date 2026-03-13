@@ -1,5 +1,3 @@
-from typing import cast
-
 import torch
 import torch.nn as nn
 
@@ -61,7 +59,7 @@ class QRNN(nn.Module):
             if isinstance(layer.hidden_dropout, LockedDropout):
                 layer.hidden_dropout.reset_mask()
 
-    def forward(self, x, c0=None):
+    def forward(self, x, hidden=None):
         """
         x: (B, T, D) if batch_first else (T, B, D)
         c0: (num_layers, B, H) or None
@@ -76,8 +74,11 @@ class QRNN(nn.Module):
 
         B, T, _ = x.shape
 
-        if c0 is None:
-            c0 = torch.zeros(self.num_layers, B, self.hidden_dim, device=x.device)
+        c0 = (
+            hidden
+            if hidden is not None
+            else torch.zeros(self.num_layers, B, self.hidden_dim, device=x.device)
+        )
 
         if self.use_locked_dropout:
             self._reset_dropout_masks()

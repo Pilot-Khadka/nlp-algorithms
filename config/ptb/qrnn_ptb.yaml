@@ -21,10 +21,16 @@ model:
   hidden_dim: 1000
   num_layers: 3
   weight_tying: false # requires input and hidden dim both to be same
+  use_locked_dropout: true
+  dropout: 0.4
+  hidden_dropout: 0.25
+  embedding_dropout: 0.1 # dropoute in awd-lstm
+  embedding_word_dropout: 0.4 #dropouti in awd-lstm
+
 
 train:
   epochs: 60
-  batch_size: 128
+  batch_size: 32
   multi_gpu: true
   optimizer: adam
   learning_rate: 0.002
