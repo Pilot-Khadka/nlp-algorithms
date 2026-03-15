@@ -1,6 +1,6 @@
 dataset:
   name: ptb
-  sequence_length: 150
+  sequence_length: 70
   vocab_size: 10000
   data_dir: data/dataset_penn_treebank/
   train_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.train.txt"
@@ -21,6 +21,7 @@ model:
   hidden_dim: 1000
   num_layers: 3
   weight_tying: false # requires input and hidden dim both to be same
+
   use_locked_dropout: true
   dropout: 0.4
   hidden_dropout: 0.25

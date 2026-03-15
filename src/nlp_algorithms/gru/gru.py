@@ -1,7 +1,10 @@
+from typing import cast, Optional
+
 import torch
 import torch.nn as nn
 
 from nlp_algorithms.engine.registry import register_model
+from nlp_algorithms.lstm.locked_dropout import LockedDropout
 
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.deterministic = False
@@ -16,69 +19,113 @@ class GRU(nn.Module):
         num_layers,
         batch_first=True,
         dropout=0.0,
+        hidden_dropout=0.0,
+        use_locked_dropout: bool = False,
         **kwargs,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.batch_first = batch_first
-        self.dropout_layers = nn.ModuleList(
-            [nn.Dropout(dropout) for _ in range(num_layers - 1)]
-        )
+        self.hidden_dropout = hidden_dropout
+        self.use_locked_dropout = use_locked_dropout
 
-        self.gates_forward_x = nn.ModuleList()
-        self.gates_forward_h = nn.ModuleList()
+        if use_locked_dropout:
+            self.layer_dropouts = nn.ModuleList(
+                [LockedDropout(hidden_dropout) for _ in range(num_layers)]
+            )
+            self.output_dropout = LockedDropout(dropout)
+        else:
+            self.layer_dropouts = nn.ModuleList(
+                [nn.Dropout(hidden_dropout) for _ in range(num_layers)]
+            )
+            self.output_dropout = nn.Dropout(dropout)
+
+        self.w_ih = nn.ParameterList()
+        self.w_hh = nn.ParameterList()
+        self.b_ih = nn.ParameterList()
+        self.b_hh = nn.ParameterList()
 
         for layer in range(num_layers):
-            layer_input_dim = input_dim if layer == 0 else hidden_dim
-            self.gates_forward_x.append(nn.Linear(layer_input_dim, 3 * hidden_dim))
-            self.gates_forward_h.append(nn.Linear(hidden_dim, 3 * hidden_dim))
+            input_size = input_dim if layer == 0 else hidden_dim
+            H = hidden_dim
+            # PyTorch GRU convention: rows are [r, z, n] gates
+            self.w_ih.append(nn.Parameter(torch.empty(3 * H, input_size)))
+            self.w_hh.append(nn.Parameter(torch.empty(3 * H, H)))
+            self.b_ih.append(nn.Parameter(torch.zeros(3 * H)))
+            self.b_hh.append(nn.Parameter(torch.zeros(3 * H)))
 
-            setattr(self, f"weight_ih_l{layer}", self.gates_forward_x[layer].weight)
-            setattr(self, f"weight_hh_l{layer}", self.gates_forward_h[layer].weight)
-            setattr(self, f"bias_ih_l{layer}", self.gates_forward_x[layer].bias)
-            setattr(self, f"bias_hh_l{layer}", self.gates_forward_h[layer].bias)
+        self._initialize_weights()
 
-    def forward(self, x, hidden=None):
-        batch_size = x.size(0) if self.batch_first else x.size(1)
-        seq_len = x.size(1) if self.batch_first else x.size(0)
-        x = x if self.batch_first else x.transpose(0, 1)
+    def _initialize_weights(self):
+        for w_ih, w_hh in zip(self.w_ih, self.w_hh):
+            nn.init.orthogonal_(w_ih)
+            nn.init.orthogonal_(w_hh)
+
+    def _reset_dropout_masks(self) -> None:
+        if not self.use_locked_dropout:
+            return
+        for dropout in self.layer_dropouts:
+            cast(LockedDropout, dropout).reset_mask()
+        cast(LockedDropout, self.output_dropout).reset_mask()
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        hidden: Optional[torch.Tensor] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if not self.batch_first:
+            x = x.transpose(0, 1)
+
+        batch_size, seq_len, _ = x.size()
+        H = self.hidden_dim
 
         if hidden is None:
             h = [
-                torch.zeros(batch_size, self.hidden_dim, device=x.device)
+                torch.zeros(batch_size, H, device=x.device, dtype=x.dtype)
                 for _ in range(self.num_layers)
             ]
         else:
             h = [hidden[i] for i in range(self.num_layers)]
 
-        outputs = []
-        for t in range(seq_len):
-            layer_input = x[:, t, :]
-            for layer in range(self.num_layers):
-                r_x, z_x, n_x = self.gates_forward_x[layer](layer_input).chunk(3, dim=1)
-                r_h, z_h, n_h = self.gates_forward_h[layer](h[layer]).chunk(3, dim=1)
+        self._reset_dropout_masks()
 
-                r_t = torch.sigmoid(r_x + r_h)
-                z_t = torch.sigmoid(z_x + z_h)
-                n_t = torch.tanh(n_x + r_t * n_h)
+        layer_input = x
+        for layer_idx in range(self.num_layers):
+            w_ih = self.w_ih[layer_idx]
+            w_hh = nn.functional.dropout(
+                self.w_hh[layer_idx], p=self.hidden_dropout, training=self.training
+            )
+            b_ih = self.b_ih[layer_idx]
+            b_hh = self.b_hh[layer_idx]
 
-                h[layer] = (1 - z_t) * n_t + z_t * h[layer]
+            x_proj = layer_input @ w_ih.t() + b_ih  # (batch, seq, 3H)
+            outputs = torch.empty(
+                batch_size, seq_len, H, device=x.device, dtype=x.dtype
+            )
 
-                if layer < self.num_layers - 1:
-                    layer_input = self.dropout_layers[layer](h[layer])
-                else:
-                    layer_input = h[layer]
+            for t in range(seq_len):
+                h_proj = h[layer_idx] @ w_hh.t() + b_hh  # (batch, 3H)
 
-            outputs.append(h[-1].unsqueeze(1))
+                r_t = torch.sigmoid(x_proj[:, t, :H] + h_proj[:, :H])
+                z_t = torch.sigmoid(x_proj[:, t, H : 2 * H] + h_proj[:, H : 2 * H])
+                n_t = torch.tanh(x_proj[:, t, 2 * H :] + r_t * h_proj[:, 2 * H :])
 
-        outputs = torch.cat(outputs, dim=1)
-        h_n = torch.stack(h, dim=0)
+                h[layer_idx] = (1 - z_t) * n_t + z_t * h[layer_idx]
+                outputs[:, t, :] = h[layer_idx]
+
+            if layer_idx < self.num_layers - 1:
+                layer_input = self.layer_dropouts[layer_idx](outputs)
+            else:
+                layer_input = outputs
+
+        output = self.output_dropout(layer_input)
 
         if not self.batch_first:
-            outputs = outputs.transpose(0, 1).contiguous()
+            output = output.transpose(0, 1).contiguous()
 
-        return outputs, h_n
+        h_n = torch.stack(h, dim=0)
+        return output, h_n
 
 
 if __name__ == "__main__":

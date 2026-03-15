@@ -61,10 +61,15 @@ Comparison between custom model implementation and PyTorch equivalents
 
 ### language modeling (penn treebank)
 
-| Model                | Implementation               | Config                                                   | Epoch         | Test Perplexity | Train Time / Epoch |
-| -------------------- | ---------------------------- | ------------------------------------------------------------------- | ------------- | --------------- | ------------------ |
-| **AWD-LSTM**         | Official (no finetuning)     | BS=20, SeqLen=70, Dropouti=0.4, Dropouth=0.25                       | up to 500     | **58.8**        | **65s**            |
-| **AWD-LSTM**         | Custom                       | BS=32, SeqLen=70, Dropouti=0.4, Dropouth=0.25, 3-layer, 1000 hidden | 60            | *86.42*           | **156s**           |
+| Model            | Implementation               | Config                                                                               | Epoch     | Test Perplexity | Train Time / Epoch |
+| ---------------- | ---------------------------- | ------------------------------------------------------------------------------------ | --------- | --------------- | ------------------ |
+| **AWD-LSTM**     | Official (no finetuning)     | BS=20, SeqLen=70, Dropouti=0.4, Dropouth=0.25                                        | up to 500 | **58.8**        | 65s                |
+| **AWD-LSTM**     | Custom                       | BS=32, SeqLen=70, Dropouti=0.4, Dropouth=0.25, 3-layer, 1000 hidden                  | 60        | 86.42           | 156s               |
+| **QRNN**         | Official (no finetuning)     | BS=20, SeqLen=70, Dropouti=0.4, Dropouth=0.3, 4-layer, 1550 hidden, emsize=400       | up to 550 | 58.3            | 28s                |
+| **QRNN**         | Custom                       | BS=32, SeqLen=70, Dropouti=0.4, Dropouth=0.25, 3-layer, 1000 hidden, locked dropout | 60        | 113.21          | 118.69s            |
+| **GRU**          | Custom (locked drop, embed drop, variational drop) | BS=16, SeqLen=70, Dropouti=0.4, EmbDrop=0.1, Dropouth=0.25, Dropout=0.4, 3-layer, 1000 hidden | 60 | **91.55** | 296s |
+| **GRU**          | PyTorch (weight drop, locked drop, embed drop)     | BS=16, SeqLen=70, Dropouti=0.4, EmbDrop=0.1, Dropouth=0.25, Dropout=0.4, 3-layer, 1000 hidden | 60 | **91.61** | 101s |
+
 
 ## roadmap
 - [ ] training seq-2-seq model on machine translation

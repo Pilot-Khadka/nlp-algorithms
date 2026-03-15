@@ -1,6 +1,6 @@
 dataset:
   name: ptb
-  sequence_length: 150
+  sequence_length: 70
   vocab_size: 10000
   data_dir: data/dataset_penn_treebank/
   train_url: "https://raw.githubusercontent.com/tomsercu/lstm/master/data/ptb.train.txt"
@@ -17,19 +17,25 @@ tokenizer:
 
 model:
   name: gru
-  input_dim: 200
+  input_dim: 400
   hidden_dim: 1000
   num_layers: 3
   weight_tying: false # requires input and hidden dim both to be same
 
+  use_locked_dropout: true
+  dropout: 0.4
+  hidden_dropout: 0.25
+  embedding_dropout: 0.1 # dropoute in awd-lstm
+  embedding_word_dropout: 0.4 #dropouti in awd-lstm
+
 train:
   epochs: 60
-  batch_size: 128
+  batch_size: 16
   multi_gpu: true
   optimizer: adam
-  learning_rate: 0.002
+  learning_rate: 0.0001
   lr_decay: 0.25
-  grad_clip: 1.0
+  grad_clip: 0.25
   weight_decay: 1.2e-6
 
 task:
