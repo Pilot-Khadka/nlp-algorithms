@@ -15,6 +15,7 @@ core_vectorization/word2vec*
 data/
 progress.txt
 external/
+test_seq2seq/
 
 
 

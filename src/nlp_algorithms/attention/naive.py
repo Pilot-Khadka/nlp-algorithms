@@ -2,6 +2,42 @@ import torch
 import torch.nn as nn
 
 
+class AdditiveAttention(nn.Module):
+    """
+    additive attention doesn’t directly compare query/key vectors like dot-product attention
+    it projects them into some shared space, squashes them with a nonlinearity
+    then reduces to a scalar score
+    """
+
+    def __init__(self, d_model, d_ff):
+        super().__init__()
+        self.W_q = nn.Linear(d_model, d_ff, bias=False)
+        self.W_k = nn.Linear(d_model, d_ff, bias=False)
+        self.v = nn.Linear(d_ff, 1, bias=False)
+
+    def forward(self, Q, K, V, mask=None):
+        # Q: [batch_size, decoder_len, model_dim]
+        # K, V: [batch_size, encoder_len, model_dim]
+
+        # for pair-wise combination between every decoder position and encoder position
+        # eg:
+        # Q.unsqueeze(2) -> [1, 2, 1, 3]
+        # K.unsqueeze(1) ->  [1, 1, 4, 3]
+        # result: [1, 2, 4, 3] through broadcasting
+
+        q_proj = self.W_q(Q).unsqueeze(2)
+        k_proj = self.W_k(K).unsqueeze(1)
+        energy = self.v(torch.tanh(q_proj + k_proj)).squeeze(-1)
+
+        if mask is not None:
+            energy.masked_fill_(mask.unsqueeze(1) == 0, float("-inf"))
+
+        attn_weights = torch.softmax(energy, dim=-1)
+        context = torch.matmul(attn_weights, V)  # [batch, dec_len, d_model]
+
+        return context, attn_weights
+
+
 def scaled_dot_product(query, key, value, mask=None):
     scale = query.size(-1) ** -0.5
     score = (query @ key.transpose(-2, -1)) * scale
@@ -12,7 +48,7 @@ def scaled_dot_product(query, key, value, mask=None):
     return (score.softmax(dim=-1)) @ value
 
 
-class MultiHeadAttentionNaive(nn.Module):
+class MultiHeadAttention(nn.Module):
     """
     Textbook implementation of multiheaded attention,
     slower because matrix multiplication is separated
