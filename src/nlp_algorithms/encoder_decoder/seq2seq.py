@@ -1,4 +1,3 @@
-import time
 import copy
 import math
 
@@ -6,10 +5,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import numpy as np
 
-
-from .positional_encoding import PositionalEncoding
+from .positional_encoding import RotaryPositionalEncoding
 
 
 class Embeddings(nn.Module):
@@ -242,7 +239,8 @@ def make_model(
     dropout=0.1,
 ):
     c = copy.deepcopy
-    position = PositionalEncoding(d_model=d_model, dropout=dropout)
+    # position = PositionalEncoding(d_model=d_model, dropout=dropout)
+    position = RotaryPositionalEncoding(d_model=d_model)
     model = EncoderDecoder(
         encoder=Encoder(d_model=d_model, num_heads=h, d_ffn=d_ff, num_layers=N),
         decoder=Decoder(d_model=d_model, num_heads=h, d_ffn=d_ff, num_layers=N),
