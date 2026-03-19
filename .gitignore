@@ -16,6 +16,8 @@ data/
 progress.txt
 external/
 test_seq2seq/
+*.pt
+*.pth
 
 
 
