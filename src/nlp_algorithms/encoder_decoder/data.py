@@ -1,14 +1,30 @@
-import os
 from os.path import exists
-from collections import Counter
 
-import spacy
 import torch
 import numpy as np
 from datasets import load_dataset
 
+from torch.utils.data import Dataset
 from torch.nn.functional import pad
 from torch.utils.data import DataLoader, DistributedSampler
+
+from nlp_algorithms.tokenization import BytePairEncoder
+
+_SPECIALS = ["<s>", "</s>", "<blank>", "<unk>"]
+_SPECIAL_OFFSET = len(_SPECIALS)
+
+BPE_VOCAB_SIZE = 8192
+
+
+class HFDatasetWrapper(Dataset):
+    def __init__(self, hf_dataset):
+        self.hf_dataset = hf_dataset
+
+    def __len__(self):
+        return len(self.hf_dataset)
+
+    def __getitem__(self, index):
+        return self.hf_dataset[index]
 
 
 def subsequent_mask(size):
@@ -52,59 +68,37 @@ def data_gen(V, batch_size, nbatches):
 
 
 class Vocab:
-    def __init__(self, tokens, min_freq=1, specials=None):
-        specials = specials or []
-        counts = Counter(tokens)
-        self._itos = specials + [
-            tok
-            for tok, freq in counts.items()
-            if freq >= min_freq and tok not in specials
+    """
+    wraps bpe encoder with 4 special tokens the seq2seq model expects
+
+    bpe assigns 0-255 to raw bytes, 256+ to merges
+    seq2seq reserves 0:<s>, 1:</s>, 2:<blank> and 3:<unk>
+    to avoid collision, bpe id is shifted by _SPECIAL_OFFSET=4
+    """
+
+    def __init__(self, bpe: BytePairEncoder):
+        self.bpe = bpe
+        self._itos = list(_SPECIALS) + [
+            bpe.vocab[i].decode("utf-8", errors="replace")
+            for i in sorted(bpe.vocab.keys())
         ]
-        self._stoi = {tok: i for i, tok in enumerate(self._itos)}
-        self._default_index = 0
-
-    def __getitem__(self, token):
-        return self._stoi.get(token, self._default_index)
-
-    def __call__(self, tokens):
-        return [self[tok] for tok in tokens]
+        self._stoi = {tok: i for i, tok in enumerate(_SPECIALS)}
 
     def __len__(self):
         return len(self._itos)
 
-    def set_default_index(self, index):
-        self._default_index = index
+    def __getitem__(self, token):
+        return self._stoi.get(token, _SPECIALS.index("<unk>"))
 
     def get_itos(self):
         return self._itos
 
+    def encode(self, text: str) -> list[int]:
+        return [i + _SPECIAL_OFFSET for i in self.bpe.tokenize(text)]
 
-def build_vocab_from_iterator(iterator, min_freq=1, specials=None):
-    all_tokens = [token for tokens in iterator for token in tokens]
-    return Vocab(all_tokens, min_freq=min_freq, specials=specials)
-
-
-def load_tokenizers():
-    try:
-        spacy_de = spacy.load("de_core_news_sm")
-    except IOError:
-        os.system("python -m spacy download de_core_news_sm")
-        spacy_de = spacy.load("de_core_news_sm")
-    try:
-        spacy_en = spacy.load("en_core_web_sm")
-    except IOError:
-        os.system("python -m spacy download en_core_web_sm")
-        spacy_en = spacy.load("en_core_web_sm")
-    return spacy_de, spacy_en
-
-
-def tokenize(text, tokenizer):
-    return [tok.text for tok in tokenizer.tokenizer(text)]
-
-
-def yield_tokens(data_iter, tokenizer, key):
-    for sample in data_iter:
-        yield tokenizer(sample[key])
+    def decode(self, ids: list[int]) -> str:
+        bpe_ids = [i - _SPECIAL_OFFSET for i in ids if i >= _SPECIAL_OFFSET]
+        return self.bpe.detokenize(bpe_ids)
 
 
 def load_multi30k():
@@ -112,38 +106,26 @@ def load_multi30k():
     return dataset["train"], dataset["validation"], dataset["test"]
 
 
-def build_vocabulary(spacy_de, spacy_en):
-    def tokenize_de(text):
-        return tokenize(text, spacy_de)
-
-    def tokenize_en(text):
-        return tokenize(text, spacy_en)
-
+def build_vocabulary(vocab_size=BPE_VOCAB_SIZE):
     train, val, test = load_multi30k()
-    all_data = list(train) + list(val) + list(test)
 
-    print("Building German Vocabulary ...")
-    vocab_src = build_vocab_from_iterator(
-        yield_tokens(all_data, tokenize_de, key="de"),
-        min_freq=2,
-        specials=["<s>", "</s>", "<blank>", "<unk>"],
-    )
+    de_text = "\n".join(train["de"] + val["de"] + test["de"])
+    en_text = "\n".join(train["en"] + val["en"] + test["en"])
 
-    print("Building English Vocabulary ...")
-    vocab_tgt = build_vocab_from_iterator(
-        yield_tokens(all_data, tokenize_en, key="en"),
-        min_freq=2,
-        specials=["<s>", "</s>", "<blank>", "<unk>"],
-    )
+    print("Training German BPE tokenizer...")
+    bpe_src = BytePairEncoder(vocab_size=vocab_size)
+    bpe_src.train(de_text)
 
-    vocab_src.set_default_index(vocab_src["<unk>"])
-    vocab_tgt.set_default_index(vocab_tgt["<unk>"])
-    return vocab_src, vocab_tgt
+    print("Training English BPE tokenizer...")
+    bpe_tgt = BytePairEncoder(vocab_size=vocab_size)
+    bpe_tgt.train(en_text)
+
+    return Vocab(bpe_src), Vocab(bpe_tgt)
 
 
-def load_vocab(spacy_de, spacy_en):
+def load_vocab(vocab_size=BPE_VOCAB_SIZE):
     if not exists("vocab.pt"):
-        vocab_src, vocab_tgt = build_vocabulary(spacy_de, spacy_en)
+        vocab_src, vocab_tgt = build_vocabulary(vocab_size)
         torch.save((vocab_src, vocab_tgt), "vocab.pt")
     else:
         vocab_src, vocab_tgt = torch.load("vocab.pt", weights_only=False)
@@ -155,10 +137,8 @@ def load_vocab(spacy_de, spacy_en):
 
 def collate_batch(
     batch,
-    src_pipeline,
-    tgt_pipeline,
-    src_vocab,
-    tgt_vocab,
+    vocab_src,
+    vocab_tgt,
     device,
     max_padding=128,
     pad_id=2,
@@ -168,30 +148,16 @@ def collate_batch(
     src_list, tgt_list = [], []
 
     for sample in batch:
-        processed_src = torch.cat(
-            [
-                bs_id,
-                torch.tensor(
-                    src_vocab(src_pipeline(sample["de"])),
-                    dtype=torch.int64,
-                    device=device,
-                ),
-                eos_id,
-            ],
-            0,
+        src_ids = torch.tensor(
+            vocab_src.encode(sample["de"]), dtype=torch.int64, device=device
         )
-        processed_tgt = torch.cat(
-            [
-                bs_id,
-                torch.tensor(
-                    tgt_vocab(tgt_pipeline(sample["en"])),
-                    dtype=torch.int64,
-                    device=device,
-                ),
-                eos_id,
-            ],
-            0,
+        tgt_ids = torch.tensor(
+            vocab_tgt.encode(sample["en"]), dtype=torch.int64, device=device
         )
+
+        processed_src = torch.cat([bs_id, src_ids, eos_id], 0)
+        processed_tgt = torch.cat([bs_id, tgt_ids, eos_id], 0)
+
         src_list.append(
             pad(processed_src, (0, max_padding - len(processed_src)), value=pad_id)
         )
@@ -206,23 +172,13 @@ def create_dataloaders(
     device,
     vocab_src,
     vocab_tgt,
-    spacy_de,
-    spacy_en,
     batch_size=12000,
     max_padding=128,
     is_distributed=True,
 ):
-    def tokenize_de(text):
-        return tokenize(text, spacy_de)
-
-    def tokenize_en(text):
-        return tokenize(text, spacy_en)
-
     def collate_fn(batch):
         return collate_batch(
             batch,
-            tokenize_de,
-            tokenize_en,
             vocab_src,
             vocab_tgt,
             device,
@@ -231,6 +187,8 @@ def create_dataloaders(
         )
 
     train_data, valid_data, _ = load_multi30k()
+    train_data = HFDatasetWrapper(train_data)
+    valid_data = HFDatasetWrapper(valid_data)
 
     train_sampler = DistributedSampler(train_data) if is_distributed else None
     valid_sampler = DistributedSampler(valid_data) if is_distributed else None

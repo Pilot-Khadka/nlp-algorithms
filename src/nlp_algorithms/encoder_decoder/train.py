@@ -7,17 +7,13 @@ import GPUtil
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.optim.lr_scheduler import LambdaLR
+from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from .data import subsequent_mask
 
 from .loss import SimpleLossCompute, LabelSmoothing
 from .seq2seq import make_model
-from .data import (
-    rate,
-    create_dataloaders,
-    Batch,
-)
+from .data import rate, create_dataloaders, collate_batch, Batch, load_multi30k
 
 
 @dataclass
@@ -32,8 +28,7 @@ def greedy_decode(model, src, src_mask, max_len, start_symbol):
     memory = model.encode(src, src_mask)
     ys = torch.zeros(1, 1).fill_(start_symbol).type_as(src.data)
     for _ in range(max_len - 1):
-        tgt_mask = subsequent_mask(ys.size(1)).unsqueeze(0).type_as(src.data)
-        out = model.decode(memory, ys, src_mask, tgt_mask)
+        out = model.decode(memory, ys, src_mask)
         prob = model.lm_head(out[:, -1])
         _, next_word = torch.max(prob, dim=1)
         next_word = next_word.data[0]
@@ -44,7 +39,13 @@ def greedy_decode(model, src, src_mask, max_len, start_symbol):
 
 
 def train_epoch(
-    data_iter, model, loss_compute, optimizer, scheduler, accum_iter=1, train_state=None
+    data_iter,
+    model,
+    loss_compute,
+    optimizer,
+    scheduler,
+    accum_iter=1,
+    train_state=None,
 ):
     if train_state is None:
         train_state = TrainState()
@@ -114,8 +115,6 @@ def train_worker(
     ngpus_per_node,
     vocab_src,
     vocab_tgt,
-    spacy_de,
-    spacy_en,
     config,
     is_distributed=False,
 ):
@@ -148,8 +147,6 @@ def train_worker(
         gpu,
         vocab_src,
         vocab_tgt,
-        spacy_de,
-        spacy_en,
         batch_size=config["batch_size"] // ngpus_per_node,
         max_padding=config["max_padding"],
         is_distributed=is_distributed,
@@ -169,8 +166,10 @@ def train_worker(
 
     for epoch in range(config["num_epochs"]):
         if is_distributed:
-            train_dataloader.sampler.set_epoch(epoch)
-            valid_dataloader.sampler.set_epoch(epoch)
+            if isinstance(train_dataloader.sampler, DistributedSampler):
+                train_dataloader.sampler.set_epoch(epoch)
+            if isinstance(valid_dataloader.sampler, DistributedSampler):
+                valid_dataloader.sampler.set_epoch(epoch)
 
         print(f"[GPU{gpu}] Epoch {epoch} Training ====", flush=True)
         _, train_state = train_epoch(
@@ -203,7 +202,7 @@ def train_worker(
         torch.save(module.state_dict(), file_path)
 
 
-def train_distributed_model(vocab_src, vocab_tgt, spacy_de, spacy_en, config):
+def train_distributed_model(vocab_src, vocab_tgt, config):
     ngpus = torch.cuda.device_count()
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "12356"
@@ -212,12 +211,103 @@ def train_distributed_model(vocab_src, vocab_tgt, spacy_de, spacy_en, config):
     mp.spawn(
         train_worker,
         nprocs=ngpus,
-        args=(ngpus, vocab_src, vocab_tgt, spacy_de, spacy_en, config, True),
+        args=(ngpus, vocab_src, vocab_tgt, config, True),
     )
 
 
-def train_model(vocab_src, vocab_tgt, spacy_de, spacy_en, config):
+def train_model(vocab_src, vocab_tgt, config):
     if config["distributed"]:
-        train_distributed_model(vocab_src, vocab_tgt, spacy_de, spacy_en, config)
+        train_distributed_model(vocab_src, vocab_tgt, config)
     else:
-        train_worker(0, 1, vocab_src, vocab_tgt, spacy_de, spacy_en, config, False)
+        train_worker(0, 1, vocab_src, vocab_tgt, config, False)
+
+
+def _decode_ids(ids, vocab, pad_idx=2):
+    ids = ids.tolist() if hasattr(ids, "tolist") else ids
+    if 1 in ids:
+        ids = ids[: ids.index(1)]
+    return vocab.decode([i for i in ids if i > 2])
+
+
+def overfit_subset(
+    vocab_src,
+    vocab_tgt,
+    n_samples=32,
+    n_epochs=50,
+    batch_size=8,
+    max_padding=72,
+    d_model=256,
+    num_layers=3,
+    lr=1e-3,
+    decode_every=10,
+    device=None,
+):
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    train_data, _, _ = load_multi30k()
+    subset = list(train_data)[:n_samples]
+
+    src_batch, tgt_batch = collate_batch(
+        subset,
+        vocab_src,
+        vocab_tgt,
+        device,
+        max_padding=max_padding,
+        pad_id=vocab_src["<blank>"],
+    )
+
+    pad_idx = vocab_tgt["<blank>"]
+    model = make_model(len(vocab_src), len(vocab_tgt), N=num_layers, d_model=d_model)
+    model.to(device)
+
+    criterion = LabelSmoothing(size=len(vocab_tgt), padding_idx=pad_idx, smoothing=0.0)
+    criterion.to(device)
+    loss_compute = SimpleLossCompute(model.lm_head, criterion)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.98), eps=1e-9)
+    print(f"Overfitting on {n_samples} samples for {n_epochs} epochs\n")
+
+    for epoch in range(1, n_epochs + 1):
+        model.train()
+        total_loss = 0.0
+        total_tokens = 0
+
+        for start in range(0, n_samples, batch_size):
+            src = src_batch[start : start + batch_size]
+            tgt = tgt_batch[start : start + batch_size]
+            batch = Batch(src, tgt, pad_idx)
+
+            out = model.forward(batch.src, batch.tgt, batch.src_mask, batch.tgt_mask)
+            loss, loss_node = loss_compute(out, batch.tgt_y, batch.ntokens)
+            loss_node.backward()
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+
+            total_loss += loss
+            total_tokens += batch.ntokens
+
+        avg_loss = total_loss / total_tokens
+        print(f"Epoch {epoch:4d} | loss {avg_loss:.4f}")
+
+        if epoch % decode_every == 0:
+            model.eval()
+            print(f"\n--- Decoding after epoch {epoch} ---")
+            with torch.no_grad():
+                for i in range(min(n_samples, 5)):
+                    src = src_batch[i].unsqueeze(0)
+                    src_mask = (src != pad_idx).unsqueeze(-2)
+                    model_out = greedy_decode(
+                        model, src, src_mask, max_padding, start_symbol=0
+                    )[0]
+
+                    src_text = _decode_ids(src_batch[i], vocab_src)
+                    tgt_text = _decode_ids(tgt_batch[i], vocab_tgt)
+                    pred_text = _decode_ids(model_out, vocab_tgt)
+
+                    print(f"  [{i}] src  : {src_text}")
+                    print(f"       tgt  : {tgt_text}")
+                    print(f"       pred : {pred_text}")
+            print()
+
+    return model

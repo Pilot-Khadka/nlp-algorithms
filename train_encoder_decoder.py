@@ -4,15 +4,11 @@ import torch
 
 from nlp_algorithms.encoder_decoder.seq2seq import make_model
 from nlp_algorithms.encoder_decoder.train import train_model
-from nlp_algorithms.encoder_decoder.data import (
-    load_tokenizers,
-    load_vocab,
-)
+from nlp_algorithms.encoder_decoder.data import load_vocab
 
 
 def load_trained_model(model_path="multi30k_model_final.pt"):
-    spacy_de, spacy_en = load_tokenizers()
-    vocab_src, vocab_tgt = load_vocab(spacy_de, spacy_en)
+    vocab_src, vocab_tgt = load_vocab()
 
     config = {
         "batch_size": 32,
@@ -28,7 +24,7 @@ def load_trained_model(model_path="multi30k_model_final.pt"):
     }
 
     if not exists(model_path):
-        train_model(vocab_src, vocab_tgt, spacy_de, spacy_en, config)
+        train_model(vocab_src, vocab_tgt, config)
 
     model = make_model(
         len(vocab_src),
