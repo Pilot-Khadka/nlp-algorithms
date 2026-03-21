@@ -1,5 +1,6 @@
-import nlp_algorithms
 from pathlib import Path
+
+import nlp_algorithms
 
 
 def get_project_base_path() -> Path:
@@ -10,3 +11,7 @@ def get_project_base_path() -> Path:
             return parent.resolve()
 
     raise RuntimeError("Could not determine project base path.")
+
+
+def get_data_path() -> Path:
+    return (get_project_base_path() / "data").resolve()
