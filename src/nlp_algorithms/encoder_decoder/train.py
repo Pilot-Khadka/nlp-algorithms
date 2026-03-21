@@ -13,7 +13,13 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from .loss import SimpleLossCompute, LabelSmoothing
 from .seq2seq import make_model
-from .data import rate, create_dataloaders, collate_batch, Batch, load_multi30k
+from .data import (
+    rate,
+    create_dataloaders,
+    collate_batch,
+    Batch,
+    load_multi30k,
+)
 
 
 @dataclass
@@ -25,7 +31,7 @@ class TrainState:
 
 
 def greedy_decode(model, src, src_mask, max_len, start_symbol):
-    memory = model.encode(src, src_mask)
+    memory = model.encode(src=src, src_mask=src_mask)
     ys = torch.zeros(1, 1).fill_(start_symbol).type_as(src.data)
     for _ in range(max_len - 1):
         out = model.decode(memory, ys, src_mask)
@@ -35,6 +41,9 @@ def greedy_decode(model, src, src_mask, max_len, start_symbol):
         ys = torch.cat(
             [ys, torch.zeros(1, 1).type_as(src.data).fill_(next_word)], dim=1
         )
+        # <\s>
+        if next_word == 1:
+            break
     return ys
 
 

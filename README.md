@@ -13,7 +13,7 @@ This repo implements classic and modern nlp algorithms. This project is ongoing 
 - [x] NLP tasks
   - [x] Classification
   - [x] Language Modeling
-  - [ ] Machine Translation (ongoing)
+  - [x] Machine Translation
 
 ## architectures
 
@@ -70,6 +70,15 @@ Comparison between custom model implementation and PyTorch equivalents
 | **GRU**          | Custom (locked drop, embed drop, variational drop) | BS=16, SeqLen=70, Dropouti=0.4, EmbDrop=0.1, Dropouth=0.25, Dropout=0.4, 3-layer, 1000 hidden | 60 | **91.55** | 296s |
 | **GRU**          | PyTorch (weight drop, locked drop, embed drop)     | BS=16, SeqLen=70, Dropouti=0.4, EmbDrop=0.1, Dropouth=0.25, Dropout=0.4, 3-layer, 1000 hidden | 60 | **91.61** | 101s |
 
+### machine translation (multi30k en->de)
+
+| Model                | Implementation               | Config (Key Hyperparams)                                              | Dataset        | Test BLEU |
+| -------------------- | ---------------------------- | --------------------------------------------------------------------- | -------------- | --------- |
+| **Transformer-Base** | [reported score from hyunwoongko/transformer](https://github.com/hyunwoongko/transformer) | 6L/6L, d=512, FF=2048, 8 heads, dropout=0.1, sinusoidal PE, BPE       | Multi30k En–De | **26.4**  |
+| **Transformer-Base** | Custom                | 6L/6L, d=512, FF=2048, 8 heads, dropout=0.1, **RoPE**, byte-level BPE | Multi30k En–De | **23.91** |
+
+* Reported score uses the its repository’s custom BLEU calculation.  
+* This repos custom implementation uses **sacreBLEU** for BLEU calculation.
 
 ## roadmap
 - [ ] training seq-2-seq model on machine translation

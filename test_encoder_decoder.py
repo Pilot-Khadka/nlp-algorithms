@@ -62,18 +62,22 @@ def check_outputs(
         b = next(iter(valid_dataloader))
         rb = Batch(b[0], b[1], pad_idx)
 
-        src_tokens = [vocab_src.get_itos()[x] for x in rb.src[0] if x != pad_idx]
-        tgt_tokens = [vocab_tgt.get_itos()[x] for x in rb.tgt[0] if x != pad_idx]
+        src_ids = [x for x in rb.src[0].tolist() if x != pad_idx]
+        tgt_ids = [x for x in rb.tgt[0].tolist() if x != pad_idx]
+        src_tokens = [vocab_src.get_itos()[x] for x in src_ids]
+        tgt_tokens = [vocab_tgt.get_itos()[x] for x in tgt_ids]
 
-        print("Source Text (Input)        : " + " ".join(src_tokens).replace("\n", ""))
-        print("Target Text (Ground Truth) : " + " ".join(tgt_tokens).replace("\n", ""))
-        model_out = greedy_decode(model, rb.src, rb.src_mask, 72, 0)[0]
-        model_txt = (
-            " ".join(
-                [vocab_tgt.get_itos()[x] for x in model_out if x != pad_idx]
-            ).split(eos_string, 1)[0]
-            + eos_string
+        print(
+            "Source Text (Input)        : "
+            + vocab_src.decode(src_ids).replace("\n", "")
         )
+        print(
+            "Target Text (Ground Truth) : "
+            + vocab_tgt.decode(tgt_ids).replace("\n", "")
+        )
+        model_out = greedy_decode(model, rb.src, rb.src_mask, 72, 0)[0]
+        model_ids = [x for x in model_out.tolist() if x != pad_idx]
+        model_txt = vocab_tgt.decode(model_ids).split(eos_string, 1)[0] + eos_string
         print("Model Output               : " + model_txt.replace("\n", ""))
         results.append((rb, src_tokens, tgt_tokens, model_out, model_txt))
     return results
@@ -121,21 +125,12 @@ def calculate_bleu(
                 model_out = greedy_decode(
                     model, src, src_mask, max_padding, start_symbol=0
                 )[0]
-                hypothesis = (
-                    " ".join(
-                        [vocab_tgt.get_itos()[x] for x in model_out if x != pad_idx]
-                    )
-                    .split(eos_string, 1)[0]
-                    .strip()
-                )
 
-                reference = (
-                    " ".join(
-                        [vocab_tgt.get_itos()[x] for x in rb.tgt[i] if x != pad_idx]
-                    )
-                    .split(eos_string, 1)[0]
-                    .strip()
-                )
+                model_ids = [x for x in model_out.tolist() if x != pad_idx]
+                hypothesis = vocab_tgt.decode(model_ids).split(eos_string, 1)[0].strip()
+
+                tgt_ids = [x for x in rb.tgt[i].tolist() if x != pad_idx]
+                reference = vocab_tgt.decode(tgt_ids).split(eos_string, 1)[0].strip()
 
                 hypotheses.append(hypothesis)
                 references.append(reference)
@@ -157,16 +152,14 @@ def run_model_example(n_examples=5):
         is_distributed=False,
     )
 
-    print("Checking Model Outputs:")
-    example_data = check_outputs(
-        valid_dataloader, model, vocab_src, vocab_tgt, n_examples=n_examples
-    )
+    # print("Checking Model Outputs:")
+    # example_data = check_outputs(
+    #     valid_dataloader, model, vocab_src, vocab_tgt, n_examples=n_examples
+    # )
 
     print("\nComputing BLEU score on test set ...")
     bleu = calculate_bleu(model, vocab_src, vocab_tgt)
     print(f"Test BLEU Score: {bleu.score:.2f}")
-
-    return model, example_data, bleu
 
 
 if __name__ == "__main__":

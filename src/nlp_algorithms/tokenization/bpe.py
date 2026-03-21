@@ -21,7 +21,7 @@ class BytePairEncoder:
         n = len(ids)
         print(f"Initial sequence length: {n:,} tokens")
 
-        tokens = list(ids)
+        tokens: list[int | None] = list(ids)
         prev = list(range(-1, n - 1))
         nxt = list(range(1, n)) + [n]
         pair_counts = defaultdict(int)
@@ -51,6 +51,7 @@ class BytePairEncoder:
 
             new_id = 256 + merge_idx
             self.merges[best_pair] = new_id
+            assert best_pair[0] is not None and best_pair[1] is not None
             self.vocab[new_id] = self.vocab[best_pair[0]] + self.vocab[best_pair[1]]
 
             positions = sorted(pair_positions.pop(best_pair, set()))
@@ -100,7 +101,7 @@ class BytePairEncoder:
                     f"(freq={best_count}, new_len={seq_len})"
                 )
 
-        print(f"Final sequence length: {seq_len} tokens")
+        print(f"Final sequence length: {seq_len:,} tokens")
         print(f"Compression ratio: {len(text.encode('utf-8')) / seq_len:.2f}x")
         return self
 
@@ -154,15 +155,22 @@ class BytePairEncoder:
         return b"".join(self.vocab[i] for i in ids).decode("utf-8", errors="replace")
 
     def save(self, path: str | Path):
-        data = {"vocab": self.vocab, "merges": self.merges}
+        data = {
+            "vocab": {str(k): v.hex() for k, v in self.vocab.items()},
+            "merges": {str(k): v for k, v in self.merges.items()},
+        }
         with open(path, "w") as f:
             json.dump(data, f)
 
     def load(self, path: str | Path):
         with open(path, "r") as f:
             data = json.load(f)
-        self.vocab = data["vocab"]
-        self.merges = [(int(p[0]), int(p[1])) for p in data["merges"]]
+
+        self.vocab = {int(k): bytes.fromhex(v) for k, v in data["vocab"].items()}
+        self.merges = {
+            tuple(map(int, k.strip("() ").split(","))): int(v)
+            for k, v in data["merges"].items()
+        }
 
 
 def pretty_vocab(vocab):
@@ -194,30 +202,54 @@ def pretty_vocab(vocab):
 
 if __name__ == "__main__":
     import time
+    import tempfile
+    from pathlib import Path
     from nlp_algorithms.util.path_util import get_data_path
 
     sample_txt_file = get_data_path() / "shakespeare.txt"
     text = open(sample_txt_file, "r", encoding="utf-8").read()
-    t0 = time.time()
+
     tokenizer = BytePairEncoder(vocab_size=512)
+
+    print("Training tokenizer...")
+    t0 = time.time()
     tokenizer.train(text, verbose=False)
     t1 = time.time()
+
+    print(f"Training took {t1 - t0:.2f} sec")
     print("Tokenizer vocab:")
     pretty_vocab(tokenizer.vocab)
 
-    test_strings = [
-        "hello world",
-        "To be, or not to be.",
-        "The quick brown fox jumps over the lazy dog!",
-    ]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        save_path = Path(tmpdir) / "bpe_test.json"
 
-    for s in test_strings:
-        print(f"\nInput: {s!r}")
-        tok = tokenizer.tokenize(s)
-        print("Tokenized IDs:", tok)
-        detok = tokenizer.detokenize(tok)
-        print("Detokenized:", detok)
-        if detok == s:
-            print("ok")
-        else:
-            print("mismatch")
+        print(f"\nSaving tokenizer to temporary file: {save_path}")
+        tokenizer.save(save_path)
+
+        print("Loading tokenizer back...")
+        tokenizer2 = BytePairEncoder(vocab_size=512)
+        tokenizer2.load(save_path)
+
+        print("Loaded vocab:")
+        pretty_vocab(tokenizer2.vocab)
+
+        test_strings = [
+            "hello world",
+            "To be, or not to be.",
+            "The quick brown fox jumps over the lazy dog!",
+        ]
+
+        print("\n=== Testing encode/decode ===")
+        for s in test_strings:
+            print(f"\nInput: {s!r}")
+
+            ids = tokenizer2.tokenize(s)
+            print("Tokenized IDs:", ids)
+
+            out = tokenizer2.detokenize(ids)
+            print("Detokenized:", out)
+
+            if out == s:
+                print("ok")
+            else:
+                print("mismatch")

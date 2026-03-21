@@ -107,10 +107,10 @@ def load_multi30k():
 
 
 def build_vocabulary(vocab_size=BPE_VOCAB_SIZE):
-    train, val, test = load_multi30k()
+    train, val, _ = load_multi30k()
 
-    de_text = "\n".join(train["de"] + val["de"] + test["de"])
-    en_text = "\n".join(train["en"] + val["en"] + test["en"])
+    de_text = "\n".join(list(train["de"]) + list(val["de"]))
+    en_text = "\n".join(list(train["en"]) + list(val["en"]))
 
     print("Training German BPE tokenizer...")
     bpe_src = BytePairEncoder(vocab_size=vocab_size)

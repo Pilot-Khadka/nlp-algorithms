@@ -10,13 +10,14 @@ from .positional_encoding import RotaryPositionalEncoding
 
 
 class Embeddings(nn.Module):
-    def __init__(self, d_model, vocab):
+    def __init__(self, d_model, vocab, dropout: float = 0.0):
         super(Embeddings, self).__init__()
         self.lut = nn.Embedding(vocab, d_model)
         self.d_model = d_model
+        self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x):
-        return self.lut(x) * math.sqrt(self.d_model)
+        return self.dropout(self.lut(x) * math.sqrt(self.d_model))
 
 
 class Generator(nn.Module):
@@ -43,7 +44,13 @@ class SwiGLUFFN(nn.Module):
 
 
 class EncoderBlock(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, d_ffn: int):
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        d_ffn: int,
+        dropout: float = 0.0,
+    ):
         super().__init__()
         assert d_model % num_heads == 0
         self.num_heads = num_heads
@@ -53,6 +60,8 @@ class EncoderBlock(nn.Module):
         self.qkv = nn.Linear(d_model, 3 * d_model, bias=False)
         self.out_proj = nn.Linear(d_model, d_model, bias=False)
         self.ffn = SwiGLUFFN(d_model, d_ffn)
+        self.dropout = nn.Dropout(p=dropout)
+        self.attn_dropout = dropout
 
     def forward(
         self, x: torch.Tensor, mask: torch.Tensor | None = None
@@ -70,15 +79,27 @@ class EncoderBlock(nn.Module):
             .permute(2, 0, 3, 1, 4)
             .unbind(0)
         )
-        x = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
+        x = F.scaled_dot_product_attention(
+            query=q,
+            key=k,
+            value=v,
+            attn_mask=mask,
+            dropout_p=self.attn_dropout if self.training else 0.0,
+        )
         x = residual + self.out_proj(x.transpose(1, 2).reshape(B, S, -1))
 
-        x = x + self.ffn(self.norm2(x))
+        x = x + self.dropout(self.ffn(self.norm2(x)))
         return x
 
 
 class DecoderBlock(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, d_ffn: int):
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        d_ffn: int,
+        dropout: float = 0.0,
+    ):
         super().__init__()
         assert d_model % num_heads == 0
         self.num_heads = num_heads
@@ -92,6 +113,8 @@ class DecoderBlock(nn.Module):
         self.cross_kv = nn.Linear(d_model, 2 * d_model, bias=False)
         self.cross_out = nn.Linear(d_model, d_model, bias=False)
         self.ffn = SwiGLUFFN(d_model, d_ffn)
+        self.dropout = nn.Dropout(dropout)
+        self.attn_dropout = dropout
 
     def forward(
         self,
@@ -113,8 +136,16 @@ class DecoderBlock(nn.Module):
             .permute(2, 0, 3, 1, 4)
             .unbind(0)
         )
-        x = F.scaled_dot_product_attention(q, k, v, is_causal=True)
-        x = residual + self.self_out(x.transpose(1, 2).reshape(B, tgt_len, -1))
+        x = F.scaled_dot_product_attention(
+            query=q,
+            key=k,
+            value=v,
+            is_causal=True,
+            dropout_p=self.attn_dropout if self.training else 0.0,
+        )
+        x = residual + self.dropout(
+            self.self_out(x.transpose(1, 2).reshape(B, tgt_len, -1))
+        )
 
         residual = x
         x = self.norm2(x)
@@ -129,10 +160,18 @@ class DecoderBlock(nn.Module):
             .permute(2, 0, 3, 1, 4)
             .unbind(0)
         )
-        x = F.scaled_dot_product_attention(q, k, v, attn_mask=cross_mask)
-        x = residual + self.cross_out(x.transpose(1, 2).reshape(B, tgt_len, -1))
+        x = F.scaled_dot_product_attention(
+            query=q,
+            key=k,
+            value=v,
+            attn_mask=cross_mask,
+            dropout_p=self.attn_dropout if self.training else 0.0,
+        )
+        x = residual + self.dropout(
+            self.cross_out(x.transpose(1, 2).reshape(B, tgt_len, -1))
+        )
 
-        x = x + self.ffn(self.norm3(x))
+        x = x + self.dropout(self.ffn(self.norm3(x)))
         return x
 
 
@@ -143,10 +182,19 @@ class Encoder(nn.Module):
         num_heads: int,
         d_ffn: int,
         num_layers: int,
+        dropout: float = 0.0,
     ):
         super().__init__()
         self.layers = nn.ModuleList(
-            [EncoderBlock(d_model, num_heads, d_ffn) for _ in range(num_layers)]
+            [
+                EncoderBlock(
+                    d_model=d_model,
+                    num_heads=num_heads,
+                    d_ffn=d_ffn,
+                    dropout=dropout,
+                )
+                for _ in range(num_layers)
+            ]
         )
         self.norm = nn.RMSNorm(d_model)
 
@@ -165,10 +213,19 @@ class Decoder(nn.Module):
         num_heads: int,
         d_ffn: int,
         num_layers: int,
+        dropout: float = 0.0,
     ):
         super().__init__()
         self.layers = nn.ModuleList(
-            [DecoderBlock(d_model, num_heads, d_ffn) for _ in range(num_layers)]
+            [
+                DecoderBlock(
+                    d_model=d_model,
+                    num_heads=num_heads,
+                    d_ffn=d_ffn,
+                    dropout=dropout,
+                )
+                for _ in range(num_layers)
+            ]
         )
         self.norm = nn.RMSNorm(d_model)
 
@@ -242,13 +299,35 @@ def make_model(
     # position = PositionalEncoding(d_model=d_model, dropout=dropout)
     position = RotaryPositionalEncoding(d_model=d_model)
     model = EncoderDecoder(
-        encoder=Encoder(d_model=d_model, num_heads=h, d_ffn=d_ff, num_layers=N),
-        decoder=Decoder(d_model=d_model, num_heads=h, d_ffn=d_ff, num_layers=N),
+        encoder=Encoder(
+            d_model=d_model,
+            num_heads=h,
+            d_ffn=d_ff,
+            num_layers=N,
+            dropout=dropout,
+        ),
+        decoder=Decoder(
+            d_model=d_model,
+            num_heads=h,
+            d_ffn=d_ff,
+            num_layers=N,
+            dropout=dropout,
+        ),
         src_embed=nn.Sequential(
-            Embeddings(d_model=d_model, vocab=src_vocab), c(position)
+            Embeddings(
+                d_model=d_model,
+                vocab=src_vocab,
+                dropout=dropout,
+            ),
+            c(position),
         ),
         tgt_embed=nn.Sequential(
-            Embeddings(d_model=d_model, vocab=tgt_vocab), c(position)
+            Embeddings(
+                d_model=d_model,
+                vocab=tgt_vocab,
+                dropout=dropout,
+            ),
+            c(position),
         ),
         lm_head=Generator(d_model, tgt_vocab),
     )
