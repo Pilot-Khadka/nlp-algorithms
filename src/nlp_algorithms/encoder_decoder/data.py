@@ -1,8 +1,10 @@
 from os.path import exists
+from pathlib import Path
 
 import torch
 import numpy as np
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk, DatasetDict
+from datasets import Dataset as HFDataset
 
 from torch.utils.data import Dataset
 from torch.nn.functional import pad
@@ -101,34 +103,85 @@ class Vocab:
         return self.bpe.detokenize(bpe_ids)
 
 
-def load_multi30k():
-    dataset = load_dataset("bentrevett/multi30k")
+def load_multi30k(src_lang="de", tgt_lang="en"):
+    data_path = Path("data/multi30k/bentrevett___multi30k")
+
+    if data_path.exists():
+        dataset = load_from_disk(str(data_path))
+    else:
+        dataset = load_dataset("bentrevett/multi30k")
+        dataset = dataset.map(
+            lambda row: {"src": row[src_lang], "tgt": row[tgt_lang]},
+            remove_columns=dataset["train"].column_names,
+        )
+        data_path.mkdir(parents=True, exist_ok=True)
+        dataset.save_to_disk(str(data_path))
+
     return dataset["train"], dataset["validation"], dataset["test"]
 
 
-def build_vocabulary(vocab_size=BPE_VOCAB_SIZE):
-    train, val, _ = load_multi30k()
+def load_ne_en(src_lang_col="ne", tgt_lang_col="en"):
+    data_path = Path("data/ne_en")
 
-    de_text = "\n".join(list(train["de"]) + list(val["de"]))
-    en_text = "\n".join(list(train["en"]) + list(val["en"]))
+    if data_path.exists():
+        dataset = load_from_disk(str(data_path))
+        return dataset["train"], dataset["validation"], dataset["test"]
 
-    print("Training German BPE tokenizer...")
+    train_raw = load_dataset("sharad461/ne-en-parallel-208k", split="train")
+    train_data = train_raw.map(
+        lambda row: {"src": row[src_lang_col], "tgt": row[tgt_lang_col]},
+        remove_columns=train_raw.column_names,
+    )
+
+    def load_flores_split(ne_file, en_file):
+        ne = load_dataset(
+            "openlanguagedata/flores_plus", data_files=ne_file, split="train"
+        )
+        en = load_dataset(
+            "openlanguagedata/flores_plus", data_files=en_file, split="train"
+        )
+        return HFDataset.from_dict(
+            {
+                "src": ne["text"],
+                "tgt": en["text"],
+            }
+        )
+
+    val_data = load_flores_split("dev/npi_Deva.jsonl", "dev/eng_Latn.jsonl")
+    test_data = load_flores_split("devtest/npi_Deva.jsonl", "devtest/eng_Latn.jsonl")
+    dataset = DatasetDict(
+        {
+            "train": train_data,
+            "validation": val_data,
+            "test": test_data,
+        }
+    )
+    data_path.mkdir(parents=True, exist_ok=True)
+    dataset.save_to_disk(str(data_path))
+    return dataset["train"], dataset["validation"], dataset["test"]
+
+
+def build_vocabulary(load_fn, vocab_size=BPE_VOCAB_SIZE):
+    train, val, _ = load_fn()
+    src_text = "\n".join(list(train["src"]) + list(val["src"]))
+    tgt_text = "\n".join(list(train["tgt"]) + list(val["tgt"]))
+
+    print("Training Source BPE tokenizer...")
     bpe_src = BytePairEncoder(vocab_size=vocab_size)
-    bpe_src.train(de_text)
+    bpe_src.train(src_text)
 
-    print("Training English BPE tokenizer...")
+    print("Training Target BPE tokenizer...")
     bpe_tgt = BytePairEncoder(vocab_size=vocab_size)
-    bpe_tgt.train(en_text)
-
+    bpe_tgt.train(tgt_text)
     return Vocab(bpe_src), Vocab(bpe_tgt)
 
 
-def load_vocab(vocab_size=BPE_VOCAB_SIZE):
-    if not exists("vocab.pt"):
-        vocab_src, vocab_tgt = build_vocabulary(vocab_size)
-        torch.save((vocab_src, vocab_tgt), "vocab.pt")
+def load_vocab(load_fn, vocab_path="vocab.pt", vocab_size=BPE_VOCAB_SIZE):
+    if not exists(vocab_path):
+        vocab_src, vocab_tgt = build_vocabulary(load_fn, vocab_size)
+        torch.save((vocab_src, vocab_tgt), vocab_path)
     else:
-        vocab_src, vocab_tgt = torch.load("vocab.pt", weights_only=False)
+        vocab_src, vocab_tgt = torch.load(vocab_path, weights_only=False)
     print("Finished.\nVocabulary sizes:")
     print(len(vocab_src))
     print(len(vocab_tgt))
@@ -149,10 +202,10 @@ def collate_batch(
 
     for sample in batch:
         src_ids = torch.tensor(
-            vocab_src.encode(sample["de"]), dtype=torch.int64, device=device
+            vocab_src.encode(sample["src"]), dtype=torch.int64, device=device
         )
         tgt_ids = torch.tensor(
-            vocab_tgt.encode(sample["en"]), dtype=torch.int64, device=device
+            vocab_tgt.encode(sample["tgt"]), dtype=torch.int64, device=device
         )
 
         processed_src = torch.cat([bs_id, src_ids, eos_id], 0)
@@ -172,6 +225,7 @@ def create_dataloaders(
     device,
     vocab_src,
     vocab_tgt,
+    load_fn,
     batch_size=12000,
     max_padding=128,
     is_distributed=True,
@@ -186,7 +240,7 @@ def create_dataloaders(
             pad_id=vocab_src["<blank>"],
         )
 
-    train_data, valid_data, _ = load_multi30k()
+    train_data, valid_data, _ = load_fn()
     train_data = HFDatasetWrapper(train_data)
     valid_data = HFDatasetWrapper(valid_data)
 

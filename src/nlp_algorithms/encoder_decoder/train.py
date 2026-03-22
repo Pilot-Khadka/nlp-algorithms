@@ -11,15 +11,9 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 
-from .loss import SimpleLossCompute, LabelSmoothing
 from .seq2seq import make_model
-from .data import (
-    rate,
-    create_dataloaders,
-    collate_batch,
-    Batch,
-    load_multi30k,
-)
+from .loss import SimpleLossCompute, LabelSmoothing
+from .data import rate, create_dataloaders, collate_batch, Batch
 
 
 @dataclass
@@ -125,6 +119,7 @@ def train_worker(
     vocab_src,
     vocab_tgt,
     config,
+    load_fn,
     is_distributed=False,
 ):
     print(f"Train worker process using GPU: {gpu} for training", flush=True)
@@ -153,9 +148,10 @@ def train_worker(
     criterion.cuda(gpu)
 
     train_dataloader, valid_dataloader = create_dataloaders(
-        gpu,
-        vocab_src,
-        vocab_tgt,
+        device=gpu,
+        vocab_src=vocab_src,
+        vocab_tgt=vocab_tgt,
+        load_fn=load_fn,
         batch_size=config["batch_size"] // ngpus_per_node,
         max_padding=config["max_padding"],
         is_distributed=is_distributed,
@@ -211,7 +207,7 @@ def train_worker(
         torch.save(module.state_dict(), file_path)
 
 
-def train_distributed_model(vocab_src, vocab_tgt, config):
+def train_distributed_model(vocab_src, vocab_tgt, config, load_fn):
     ngpus = torch.cuda.device_count()
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "12356"
@@ -220,15 +216,15 @@ def train_distributed_model(vocab_src, vocab_tgt, config):
     mp.spawn(
         train_worker,
         nprocs=ngpus,
-        args=(ngpus, vocab_src, vocab_tgt, config, True),
+        args=(ngpus, vocab_src, vocab_tgt, config, load_fn, True),
     )
 
 
-def train_model(vocab_src, vocab_tgt, config):
+def train_model(vocab_src, vocab_tgt, config, load_fn):
     if config["distributed"]:
-        train_distributed_model(vocab_src, vocab_tgt, config)
+        train_distributed_model(vocab_src, vocab_tgt, config, load_fn)
     else:
-        train_worker(0, 1, vocab_src, vocab_tgt, config, False)
+        train_worker(0, 1, vocab_src, vocab_tgt, config, load_fn, False)
 
 
 def _decode_ids(ids, vocab, pad_idx=2):
@@ -241,6 +237,7 @@ def _decode_ids(ids, vocab, pad_idx=2):
 def overfit_subset(
     vocab_src,
     vocab_tgt,
+    load_fn,
     n_samples=32,
     n_epochs=50,
     batch_size=8,
@@ -254,7 +251,7 @@ def overfit_subset(
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    train_data, _, _ = load_multi30k()
+    train_data, _, _ = load_fn()
     subset = list(train_data)[:n_samples]
 
     src_batch, tgt_batch = collate_batch(

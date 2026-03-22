@@ -4,11 +4,15 @@ import torch
 
 from nlp_algorithms.encoder_decoder.seq2seq import make_model
 from nlp_algorithms.encoder_decoder.train import train_model
-from nlp_algorithms.encoder_decoder.data import load_vocab
+from nlp_algorithms.encoder_decoder.data import load_vocab, load_ne_en, load_multi30k
 
 
-def load_trained_model(model_path="multi30k_model_final.pt"):
-    vocab_src, vocab_tgt = load_vocab()
+def load_trained_model(
+    load_fn=load_multi30k,
+    vocab_path="de_en_vocab.pt",
+    model_path="de_en_model_final.pt",
+):
+    vocab_src, vocab_tgt = load_vocab(load_fn=load_fn, vocab_path=vocab_path)
 
     config = {
         "batch_size": 32,
@@ -20,11 +24,11 @@ def load_trained_model(model_path="multi30k_model_final.pt"):
         "warmup": 3000,
         "num_layers": 6,
         "d_model": 512,
-        "file_prefix": "multi30k_model_",
+        "file_prefix": "en_ne_model_",
     }
 
     if not exists(model_path):
-        train_model(vocab_src, vocab_tgt, config)
+        train_model(vocab_src, vocab_tgt, config, load_fn=load_fn)
 
     model = make_model(
         len(vocab_src),

@@ -95,11 +95,11 @@ class BytePairEncoder:
                     prev[k] = i
                 seq_len -= 1
 
-            if verbose:
-                print(
-                    f"Merge {merge_idx + 1}: {best_pair} -> {new_id} "
-                    f"(freq={best_count}, new_len={seq_len})"
-                )
+            # if verbose:
+            #    print(
+            #        f"Merge {merge_idx + 1}: {best_pair} -> {new_id} "
+            #        f"(freq={best_count}, new_len={seq_len})"
+            #    )
 
         print(f"Final sequence length: {seq_len:,} tokens")
         print(f"Compression ratio: {len(text.encode('utf-8')) / seq_len:.2f}x")
