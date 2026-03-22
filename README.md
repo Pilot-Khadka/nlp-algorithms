@@ -75,9 +75,9 @@ Comparison between custom model implementation and PyTorch equivalents
 | Model                | Implementation               | Config (Key Hyperparams)                                              | Dataset        | Test BLEU |
 | -------------------- | ---------------------------- | --------------------------------------------------------------------- | -------------- | --------- |
 | **Transformer-Base** | [reported score from hyunwoongko/transformer](https://github.com/hyunwoongko/transformer) | 6L/6L, d=512, FF=2048, 8 heads, dropout=0.1, sinusoidal PE, BPE       | Multi30k En–De | **26.4**  |
-| **Transformer-Base** | Custom                | 6L/6L, d=512, FF=2048, 8 heads, dropout=0.1, **RoPE**, byte-level BPE | Multi30k En–De | **23.91** |
+| **Transformer-Base** | Custom                | 6L/6L, d=512, FF=2048, 8 heads, dropout=0.1, **RoPE**, byte-level BPE | Multi30k En–De | **23.91** (greedy decoding) |
 
-* Reported score uses the its repository’s custom BLEU calculation.  
+* Reported score uses the its repository’s custom BLEU calculation.
 * This repos custom implementation uses **sacreBLEU** for BLEU calculation.
 
 ## roadmap

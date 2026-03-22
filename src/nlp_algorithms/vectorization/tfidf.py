@@ -1,42 +1,58 @@
 import math
-from collections import defaultdict
+from collections import Counter
 
 
 class TFIDF:
     def __init__(self):
-        self.tf = []
         self.idf = {}
-        self.vocab = {}
+        self.df = {}
+        self.vocab = set()
+        self.n_docs = 0
 
-    def fit_transform(self, x):
-        N = len(x)
-        corpus = []
-        vocab = defaultdict(int)
+    def fit(self, texts):
+        """
+        First pass: calc document frequency (df) per word.
+        """
+        self.n_docs = 0
+        df_counter = Counter()
 
-        for doc in x:
-            word_counts = defaultdict(int)
-            for word in doc.split():
-                word_counts[word] += 1
-                vocab[word] += 1
-            corpus.append(word_counts)
+        for text in texts:
+            self.n_docs += 1
+            words = text.split()
+            unique_words = set(words)
+            df_counter.update(unique_words)
 
-        # calculate document frequency and idf
-        for word in vocab:
-            df = sum(1 for doc in corpus if word in doc)
-            self.idf[word] = math.log(N / (1 + df))
+        self.idf = {
+            word: math.log(self.n_docs / (1 + df)) for word, df in df_counter.items()
+        }
+        self.df = df_counter
+        self.vocab = set(df_counter.keys())
+        return self
 
-        # tfidf
-        tfidf_matrix = []
-        for word_counts in corpus:
-            doc_tfidf = {}
-            total_words = sum(word_counts.values())
-            for word, count in word_counts.items():
-                tf = count / total_words  # term frequency
-                tfidf_value = tf * self.idf[word]  # TF-IDF score
-                doc_tfidf[word] = tfidf_value
-            tfidf_matrix.append(doc_tfidf)
+    def transform(self, texts):
+        """
+        Second pass: calc TF-IDF vectors for each document.
+        """
+        for text in texts:
+            words = text.split()
+            if not words:
+                yield {}
+                continue
 
-        return tfidf_matrix
+            tf_counter = Counter(words)
+            total_words = sum(tf_counter.values())
+
+            tfidf_vec = {}
+            for word, count in tf_counter.items():
+                if word in self.idf:
+                    tf = count / total_words
+                    tfidf_vec[word] = tf * self.idf[word]
+
+            yield tfidf_vec
+
+    def fit_transform(self, texts):
+        texts = list(texts)
+        return self.fit(texts).transform(texts)
 
 
 if __name__ == "__main__":
@@ -46,22 +62,12 @@ if __name__ == "__main__":
         "cats and dogs are pets",
     ]
 
-    tfidf_model = TFIDF()
-    result = tfidf_model.fit_transform(documents)
+    tfidf = TFIDF()
+    vectors = list(tfidf.fit_transform(documents))
 
-    print("Input documents:")
-    for i, doc in enumerate(documents):
-        print(f"  Doc {i + 1}: '{doc}'")
+    print("Vocabulary:", tfidf.vocab)
+    print("IDF:", tfidf.idf)
 
-    print(f"\nVocabulary size: {len(tfidf_model.idf)}")
-    print("Vocabulary:", list(tfidf_model.idf.keys()))
-
-    print("\nIDF values:")
-    for word, idf_val in sorted(tfidf_model.idf.items()):
-        print(f"  {word}: {idf_val:.4f}")
-
-    print("\nTF-IDF Results:")
-    for i, doc_tfidf in enumerate(result):
-        print(f"\nDocument {i + 1}:")
-        for word, score in sorted(doc_tfidf.items(), key=lambda x: x[1], reverse=True):
-            print(f"  {word}: {score:.4f}")
+    for i, vec in enumerate(vectors):
+        print(f"\nDocument {i + 1} TF-IDF:")
+        print(vec)

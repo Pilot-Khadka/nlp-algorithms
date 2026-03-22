@@ -133,6 +133,7 @@ def train_worker(
         d_model=config["d_model"],
     )
     model.cuda(gpu)
+    # model = torch.compile(model, dynamic=False, fullgraph=True)
     module = model
     is_main_process = True
 

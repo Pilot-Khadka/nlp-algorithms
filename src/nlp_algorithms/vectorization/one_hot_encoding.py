@@ -1,96 +1,46 @@
-def create_vocabulary(texts):
-    if isinstance(texts, str):
-        texts = [texts]
-
-    vocab = set()
-    for text in texts:
-        words = text.lower().split()
-        vocab.update(words)
-
-    word_to_idx = {}
-    for idx, word in enumerate(sorted(vocab)):
-        word_to_idx[word] = idx
-
-    return word_to_idx
+from collections import Counter
 
 
-def one_hot_encode(text, word_to_idx):
-    encoded_text = []
-    words = text.lower().split()
-    vocab_size = len(word_to_idx)
+class OneHotEncoder:
+    def __init__(self, max_vocab: int = 50000):
+        self.max_vocab = max_vocab
+        self.vocab: dict[str, int] = {}
 
-    for word in words:
-        one_hot = [0] * vocab_size
-        if word in word_to_idx:
-            one_hot[word_to_idx[word]] = 1
-        else:
-            print(f"{word} not found in vocab")
-        encoded_text.append(one_hot)
+    def fit(self, texts):
+        freq = Counter()
 
-    return encoded_text
+        for text in texts:
+            for word in text.lower().split():
+                freq[word] += 1
 
+        most_common = freq.most_common(self.max_vocab)
+        self.vocab = {word: idx for idx, (word, _) in enumerate(most_common)}
+        return self
 
-def one_hot_encode_sentence(text, word_to_idx):
-    vocab_size = len(word_to_idx)
-    one_hot = [0] * vocab_size
-    words = text.lower().split()
+    def transform(self, texts):
+        vocab_size = len(self.vocab)
 
-    for word in words:
-        if word in word_to_idx:
-            one_hot[word_to_idx[word]] = 1  # Set to 1 if word is present
+        for text in texts:
+            words = text.lower().split()
+            encoded_sentence = []
 
-    return one_hot
+            for word in words:
+                vector = [0] * vocab_size
+                if word in self.vocab:
+                    vector[self.vocab[word]] = 1
+                encoded_sentence.append(vector)
 
+            yield encoded_sentence
 
-def display_encoding(text, encoded_vectors):
-    words = text.lower().split()
+    def transform_sentence(self, texts):
+        vocab_size = len(self.vocab)
+        for text in texts:
+            vec = [0] * vocab_size
+            for word in text.lower().split():
+                if word in self.vocab:
+                    vec[self.vocab[word]] = 1
+            yield vec
 
-    print(f"Text: '{text}'")
-    print(f"Words: {words}")
-    print("Encoded vectors:")
-
-    for i, (word, vector) in enumerate(zip(words, encoded_vectors)):
-        active_idx = vector.index(1) if 1 in vector else -1
-        print(
-            f"""
-                Word '{word}' -> Index {active_idx} -> {vector[:10]}{
-                "..." if len(vector) > 10 else ""
-            }"""
-        )
-
-
-if __name__ == "__main__":
-    d1 = "hello there how are you?"
-    d2 = "I hope you are doing well."
-    d3 = "There is more sand grains the deserts of the earth than there are stars in the universe"
-
-    all_texts = [d1, d2, d3]
-    combined_text = d1 + " " + d2 + " " + d3
-
-    print("=" * 60)
-    print("ORIGINAL IMPLEMENTATION FIXED")
-    print("=" * 60)
-
-    word_to_idx = create_vocabulary(all_texts)
-    vocab = set(word.lower() for text in all_texts for word in text.split())
-
-    print(f"Combined text: '{combined_text}'")
-    print(f"Length of original text (words): {len(combined_text.split())}")
-    print(f"Length of unique words: {len(vocab)}")
-    print(f"Vocabulary (first 10): {sorted(list(vocab))[:10]}")
-
-    for i, text in enumerate(all_texts, 1):
-        print(f"\nDocument {i}:")
-        encoded = one_hot_encode(text, word_to_idx)
-        display_encoding(text, encoded)
-
-        sentence_encoding = one_hot_encode_sentence(text, word_to_idx)
-        active_words = [
-            word for word, idx in word_to_idx.items() if sentence_encoding[idx] == 1
-        ]
-        print(f"  Sentence encoding: {len(active_words)} unique words active")
-        print(
-            f"""  Active words: {sorted(active_words)[:10]}{
-                "..." if len(active_words) > 10 else ""
-            }"""
-        )
+    def fit_transform(self, texts):
+        texts = list(texts)
+        return self.fit(texts).transform(texts)
