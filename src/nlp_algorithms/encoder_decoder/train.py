@@ -1,5 +1,6 @@
 import os
 import time
+import functools
 from dataclasses import dataclass
 
 import torch
@@ -13,7 +14,14 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from .seq2seq import make_model
 from .loss import SimpleLossCompute, LabelSmoothing
-from .data import rate, create_dataloaders, collate_batch, Batch
+from .data import (
+    rate,
+    create_dataloaders,
+    collate_batch,
+    pretokenize,
+    Batch,
+    TokenBatchSampler,
+)
 
 
 @dataclass
@@ -41,6 +49,45 @@ def greedy_decode(model, src, src_mask, max_len, start_symbol):
     return ys
 
 
+def beam_search(
+    model, src, src_mask, max_len, start_symbol, beam_size=5, len_penalty=1.0
+):
+    # same scoring as fairseq: sum of log probs / length ** len_penalty
+    memory = model.encode(src=src, src_mask=src_mask)
+    ys = torch.zeros(1, 1).fill_(start_symbol).type_as(src.data)
+    scores = torch.zeros(1, device=src.device)
+    finished = []
+    for _ in range(max_len - 1):
+        k = ys.size(0)
+        out = model.decode(memory.expand(k, -1, -1), ys, src_mask.expand(k, -1, -1))
+        log_probs = model.lm_head(out[:, -1]).float()
+        vocab_size = log_probs.size(-1)
+        top, idx = (scores[:, None] + log_probs).view(-1).topk(2 * beam_size)
+
+        next_ys, next_scores = [], []
+        for score, i in zip(top.tolist(), idx.tolist()):
+            seq = torch.cat([ys[i // vocab_size], ys.new_tensor([i % vocab_size])])
+            # <\s>
+            if i % vocab_size == 1:
+                finished.append((score / (len(seq) - 1) ** len_penalty, seq))
+            else:
+                next_ys.append(seq)
+                next_scores.append(score)
+            if len(next_ys) == beam_size:
+                break
+        if len(finished) >= beam_size:
+            break
+        ys = torch.stack(next_ys)
+        scores = torch.tensor(next_scores, device=src.device)
+
+    if not finished:
+        finished = [
+            (score / (ys.size(1) - 1) ** len_penalty, seq)
+            for score, seq in zip(scores.tolist(), ys)
+        ]
+    return max(finished, key=lambda x: x[0])[1].unsqueeze(0)
+
+
 def train_epoch(
     data_iter,
     model,
@@ -49,7 +96,12 @@ def train_epoch(
     scheduler,
     accum_iter=1,
     train_state=None,
+    amp_dtype=torch.bfloat16,
+    scaler=None,
+    log_every=1000,
 ):
+    if scaler is None:
+        scaler = torch.amp.GradScaler("cuda", enabled=False)
     if train_state is None:
         train_state = TrainState()
 
@@ -61,17 +113,18 @@ def train_epoch(
     n_accum = 0
 
     for i, batch in enumerate(data_iter):
-        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        with torch.autocast(device_type="cuda", dtype=amp_dtype):
             out = model.forward(batch.src, batch.tgt, batch.src_mask, batch.tgt_mask)
         loss, loss_node = loss_compute(out, batch.tgt_y, batch.ntokens)
-        loss_node.backward()
+        scaler.scale(loss_node).backward()
 
         train_state.step += 1
         train_state.samples += batch.src.shape[0]
         train_state.tokens += batch.ntokens
 
         if i % accum_iter == 0:
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             optimizer.zero_grad(set_to_none=True)
             n_accum += 1
             train_state.accum_step += 1
@@ -81,7 +134,7 @@ def train_epoch(
         total_tokens += batch.ntokens
         tokens += batch.ntokens
 
-        if i % 40 == 1:
+        if i % log_every == 1:
             lr = optimizer.param_groups[0]["lr"]
             elapsed = time.time() - start
             print(
@@ -131,6 +184,9 @@ def train_worker(
         len(vocab_tgt),
         N=config["num_layers"],
         d_model=config["d_model"],
+        dropout=config.get("dropout", 0.1),
+        attn_dropout=config.get("attn_dropout"),
+        shared_embeddings=config.get("shared_embeddings", False),
     )
     model.cuda(gpu)
     # model = torch.compile(model, dynamic=False, fullgraph=True)
@@ -145,7 +201,11 @@ def train_worker(
         module = model.module
         is_main_process = gpu == 0
 
-    criterion = LabelSmoothing(size=len(vocab_tgt), padding_idx=pad_idx, smoothing=0.1)
+    criterion = LabelSmoothing(
+        size=len(vocab_tgt),
+        padding_idx=pad_idx,
+        smoothing=config.get("label_smoothing", 0.1),
+    )
     criterion.cuda(gpu)
 
     train_dataloader, valid_dataloader = create_dataloaders(
@@ -156,6 +216,8 @@ def train_worker(
         batch_size=config["batch_size"] // ngpus_per_node,
         max_padding=config["max_padding"],
         is_distributed=is_distributed,
+        # per gpu, the batch per update is max_tokens * gpus * accum_iter
+        max_tokens=config.get("max_tokens"),
     )
 
     optimizer = torch.optim.AdamW(
@@ -163,6 +225,7 @@ def train_worker(
         lr=config["base_lr"],
         betas=(0.9, 0.98),
         eps=1e-9,
+        weight_decay=config.get("weight_decay", 0.01),
     )
     lr_scheduler = LambdaLR(
         optimizer=optimizer,
@@ -173,7 +236,23 @@ def train_worker(
     train_state = TrainState()
     loss_compute = SimpleLossCompute(module.lm_head, criterion)
 
+    # t4/p100 have no native bf16, use fp16 there with a grad scaler
+    if not config.get("amp", True):
+        amp_dtype = torch.float32
+    elif torch.cuda.is_bf16_supported(including_emulation=False):
+        amp_dtype = torch.bfloat16
+    else:
+        amp_dtype = torch.float16
+    scaler = torch.amp.GradScaler("cuda", enabled=amp_dtype == torch.float16)
+
+    os.makedirs(os.path.dirname(config["file_prefix"]) or ".", exist_ok=True)
+    keep_last = config.get("keep_last")
+    best_val_loss = float("inf")
+    start = time.time()
+
     for epoch in range(config["num_epochs"]):
+        if isinstance(train_dataloader.batch_sampler, TokenBatchSampler):
+            train_dataloader.batch_sampler.set_epoch(epoch)
         if is_distributed:
             if isinstance(train_dataloader.sampler, DistributedSampler):
                 train_dataloader.sampler.set_epoch(epoch)
@@ -189,12 +268,20 @@ def train_worker(
             lr_scheduler,
             accum_iter=config["accum_iter"],
             train_state=train_state,
+            amp_dtype=amp_dtype,
+            scaler=scaler,
+            log_every=config.get("log_every", 1000),
         )
 
         GPUtil.showUtilization()
         if is_main_process:
             file_path = "%s%.2d.pt" % (config["file_prefix"], epoch)
             torch.save(module.state_dict(), file_path)
+            # epoch checkpoints are large, keep only the last few for averaging
+            if keep_last:
+                old_path = "%s%.2d.pt" % (config["file_prefix"], epoch - keep_last)
+                if os.path.exists(old_path):
+                    os.remove(old_path)
         torch.cuda.empty_cache()
 
         print(f"[GPU{gpu}] Epoch {epoch} Validation ====", flush=True)
@@ -203,12 +290,29 @@ def train_worker(
             model,
             loss_compute,
         )
-        print(val_loss)
+        print(f"[GPU{gpu}] Epoch {epoch} val loss: {val_loss:.4f}", flush=True)
+        if is_main_process and val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(module.state_dict(), "%sbest.pt" % config["file_prefix"])
         torch.cuda.empty_cache()
+
+        if config.get("max_hours") and _time_is_up(
+            start, config["max_hours"], gpu, is_distributed
+        ):
+            print(f"[GPU{gpu}] stopping after epoch {epoch}, out of time", flush=True)
+            break
 
     if is_main_process:
         file_path = "%sfinal.pt" % config["file_prefix"]
         torch.save(module.state_dict(), file_path)
+
+
+def _time_is_up(start, max_hours, gpu, is_distributed):
+    # every gpu has to stop at the same epoch or ddp hangs
+    done = torch.tensor(float(time.time() - start > max_hours * 3600), device=gpu)
+    if is_distributed:
+        dist.all_reduce(done, op=dist.ReduceOp.MAX)
+    return bool(done.item())
 
 
 def train_distributed_model(vocab_src, vocab_tgt, config, load_fn):
@@ -224,7 +328,31 @@ def train_distributed_model(vocab_src, vocab_tgt, config, load_fn):
     )
 
 
+def _pretokenized(train_data, valid_data):
+    return train_data, valid_data, None
+
+
 def train_model(vocab_src, vocab_tgt, config, load_fn):
+    # bpe encoding is slow, do it once here instead of in collate every epoch
+    train_raw, valid_raw, _ = load_fn()
+    num_workers = os.cpu_count() or 1
+    train_rows = pretokenize(train_raw, vocab_src, vocab_tgt, num_workers=num_workers)
+    # drop pairs that do not fit instead of truncating them (fairseq skips them too),
+    # a truncated target teaches </s> in the middle of a sentence
+    max_len = config["max_padding"] - 2
+    n_rows = len(train_rows)
+    train_rows = [
+        r
+        for r in train_rows
+        if len(r["src_ids"]) <= max_len and len(r["tgt_ids"]) <= max_len
+    ]
+    print(f"dropped {n_rows - len(train_rows)} train pairs longer than {max_len} tokens")
+    load_fn = functools.partial(
+        _pretokenized,
+        train_rows,
+        pretokenize(valid_raw, vocab_src, vocab_tgt, num_workers=num_workers),
+    )
+
     if config["distributed"]:
         train_distributed_model(vocab_src, vocab_tgt, config, load_fn)
     else:

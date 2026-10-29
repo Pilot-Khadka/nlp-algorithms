@@ -30,7 +30,7 @@ def diagnose_tokenization(loader, vocab_src, vocab_tgt, pad_id, n=3):
         print(f"     tgt token len (no pad): {len(tgt_tokens)} -> {tgt_tokens[:10]}...")
 
 
-def compute_length_stats(loader, pad_id, sample_size=10_000, desc=""):
+def calculate_length_stats(loader, pad_id, sample_size=10_000, desc=""):
     src_lens, tgt_lens = [], []
 
     for src_batch, tgt_batch in tqdm(loader, desc=desc):
@@ -112,7 +112,7 @@ def create_dataloaders(
 
 
 def main():
-    vocab_path = "ne_en_vocab.pt"
+    vocab_path = "checkpoint/ne_en/vocab.pt"
     vocab_src, vocab_tgt = load_vocab(load_fn=load_ne_en, vocab_path=vocab_path)
     pad_id = vocab_src["<blank>"]
 
@@ -128,10 +128,10 @@ def main():
 
     diagnose_tokenization(train_loader, vocab_src, vocab_tgt, pad_id)
 
-    train_src_stats, train_tgt_stats = compute_length_stats(
+    train_src_stats, train_tgt_stats = calculate_length_stats(
         train_loader, pad_id, sample_size=10_000, desc="train"
     )
-    val_src_stats, val_tgt_stats = compute_length_stats(
+    val_src_stats, val_tgt_stats = calculate_length_stats(
         val_loader, pad_id, sample_size=999_999, desc="val"
     )
 

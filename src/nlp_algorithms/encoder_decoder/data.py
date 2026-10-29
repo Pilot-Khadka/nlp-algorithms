@@ -1,13 +1,20 @@
+import os
+import re
+import random
+import unicodedata
+import functools
+import multiprocessing
 from os.path import exists
 from pathlib import Path
 
 import torch
 import numpy as np
+import torch.distributed as dist
 from tqdm import tqdm
 from datasets import load_dataset, load_from_disk, DatasetDict
 from datasets import Dataset as HFDataset
 
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 from torch.nn.functional import pad
 from torch.utils.data import DataLoader, DistributedSampler
 
@@ -121,12 +128,65 @@ def load_multi30k(src_lang="de", tgt_lang="en"):
     return dataset["train"], dataset["validation"], dataset["test"]
 
 
-def load_ne_en(src_lang_col="ne", tgt_lang_col="en"):
+_ZERO_WIDTH = re.compile("[​‌‍﻿]")
+_DEVA_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
+
+
+def normalize_ne(text):
+    # flores writes numbers with ascii digits and the danda without a space
+    text = unicodedata.normalize("NFC", text)
+    text = _ZERO_WIDTH.sub("", text).translate(_DEVA_DIGITS)
+    text = re.sub(r"\s+([।॥])", r"\1", text)
+    return " ".join(text.split())
+
+
+def normalize_en(text):
+    return " ".join(unicodedata.normalize("NFC", text).split())
+
+
+def clean_pairs(src, tgt, max_ratio=3.0):
+    # drops empty, untranslated, duplicate and badly aligned pairs
+    seen = set()
+    out_src, out_tgt = [], []
+    for s, t in zip(src, tgt):
+        if not s or not t or s == t or (s, t) in seen:
+            continue
+        if not 1 / max_ratio <= len(s) / len(t) <= max_ratio:
+            continue
+        seen.add((s, t))
+        out_src.append(s)
+        out_tgt.append(t)
+    return out_src, out_tgt
+
+
+def _normalize_ne_en(train, val, test):
+    # in memory, dataset.map would try to write a cache next to read-only kaggle input
+    src, tgt = clean_pairs(
+        [normalize_ne(s) for s in train["src"]],
+        [normalize_en(t) for t in train["tgt"]],
+    )
+    print(f"ne_en train: {len(train)} -> {len(src)} pairs after cleaning")
+    train = HFDataset.from_dict({"src": src, "tgt": tgt})
+    # the test references stay as they are for bleu
+    val = HFDataset.from_dict(
+        {
+            "src": [normalize_ne(s) for s in val["src"]],
+            "tgt": [normalize_en(t) for t in val["tgt"]],
+        }
+    )
+    test = HFDataset.from_dict(
+        {"src": [normalize_ne(s) for s in test["src"]], "tgt": list(test["tgt"])}
+    )
+    return train, val, test
+
+
+def load_ne_en(src_lang_col="ne", tgt_lang_col="en", normalize=True):
     data_path = Path("data/ne_en")
 
     if data_path.exists():
         dataset = load_from_disk(str(data_path))
-        return dataset["train"], dataset["validation"], dataset["test"]
+        splits = dataset["train"], dataset["validation"], dataset["test"]
+        return _normalize_ne_en(*splits) if normalize else splits
 
     train_raw = load_dataset("sharad461/ne-en-parallel-208k", split="train")
     train_data = train_raw.map(
@@ -159,11 +219,25 @@ def load_ne_en(src_lang_col="ne", tgt_lang_col="en"):
     )
     data_path.mkdir(parents=True, exist_ok=True)
     dataset.save_to_disk(str(data_path))
-    return dataset["train"], dataset["validation"], dataset["test"]
+    splits = dataset["train"], dataset["validation"], dataset["test"]
+    return _normalize_ne_en(*splits) if normalize else splits
 
 
-def build_vocabulary(load_fn, vocab_size=BPE_VOCAB_SIZE):
+def build_vocabulary(load_fn, vocab_size=BPE_VOCAB_SIZE, joint=False, sample_size=None):
     train, val, _ = load_fn()
+    if joint:
+        # one bpe for both languages so the embeddings can be shared,
+        # names and numbers get the same ids on both sides
+        rows = list(zip(train["src"], train["tgt"]))
+        if sample_size is not None and sample_size < len(rows):
+            # bpe training keeps python objects per byte, the full corpus does not fit in memory
+            rows = random.Random(42).sample(rows, sample_size)
+        print("Training joint BPE tokenizer...")
+        bpe = BytePairEncoder(vocab_size=vocab_size)
+        bpe.train("\n".join(text for row in rows for text in row))
+        vocab = Vocab(bpe)
+        return vocab, vocab
+
     src_text = "\n".join(list(train["src"]) + list(val["src"]))
     tgt_text = "\n".join(list(train["tgt"]) + list(val["tgt"]))
 
@@ -177,9 +251,10 @@ def build_vocabulary(load_fn, vocab_size=BPE_VOCAB_SIZE):
     return Vocab(bpe_src), Vocab(bpe_tgt)
 
 
-def load_vocab(load_fn, vocab_path, vocab_size=BPE_VOCAB_SIZE):
+def load_vocab(load_fn, vocab_path, vocab_size=BPE_VOCAB_SIZE, **kwargs):
     if not exists(vocab_path):
-        vocab_src, vocab_tgt = build_vocabulary(load_fn, vocab_size)
+        vocab_src, vocab_tgt = build_vocabulary(load_fn, vocab_size, **kwargs)
+        os.makedirs(os.path.dirname(vocab_path) or ".", exist_ok=True)
         torch.save((vocab_src, vocab_tgt), vocab_path)
     else:
         vocab_src, vocab_tgt = torch.load(vocab_path, weights_only=False)
@@ -189,13 +264,33 @@ def load_vocab(load_fn, vocab_path, vocab_size=BPE_VOCAB_SIZE):
     return vocab_src, vocab_tgt
 
 
-def pretokenize(rows, vocab_src, vocab_tgt):
+def pretokenize(rows, vocab_src, vocab_tgt, num_workers=1, show_progress=True):
+    # mininterval keeps the progress bar from flooding non-terminal logs (kaggle)
+    if num_workers > 1:
+        # bpe is pure python, split the rows over processes
+        rows = list(rows)
+        size = -(-len(rows) // (num_workers * 20))
+        chunks = [rows[i : i + size] for i in range(0, len(rows), size)]
+        fn = functools.partial(
+            pretokenize, vocab_src=vocab_src, vocab_tgt=vocab_tgt, show_progress=False
+        )
+        with multiprocessing.get_context("fork").Pool(num_workers) as pool:
+            done = tqdm(
+                pool.imap(fn, chunks),
+                total=len(chunks),
+                desc="tokenizing",
+                mininterval=60,
+            )
+            return [row for chunk in done for row in chunk]
+
     return [
         {
             "src_ids": vocab_src.encode(row["src"]),
             "tgt_ids": vocab_tgt.encode(row["tgt"]),
         }
-        for row in tqdm(rows, desc="tokenizing")
+        for row in tqdm(
+            rows, desc="tokenizing", mininterval=60, disable=not show_progress
+        )
     ]
 
 
@@ -207,8 +302,9 @@ def collate_batch(
     max_padding=512,
     pad_id=2,
 ):
-    bs_id = torch.tensor([0], device=device)
-    eos_id = torch.tensor([1], device=device)
+    # built on cpu and moved to the device once per batch
+    bs_id = torch.tensor([0])
+    eos_id = torch.tensor([1])
     src_list, tgt_list = [], []
 
     max_content_len = max_padding - 2  # reserve slots for BOS + EOS
@@ -221,23 +317,70 @@ def collate_batch(
             src_ids = vocab_src.encode(sample["src"])
             tgt_ids = vocab_tgt.encode(sample["tgt"])
 
-        src_ids = torch.tensor(src_ids, dtype=torch.int64, device=device)[
-            :max_content_len
-        ]
-        tgt_ids = torch.tensor(tgt_ids, dtype=torch.int64, device=device)[
-            :max_content_len
-        ]
+        src_ids = torch.tensor(src_ids, dtype=torch.int64)[:max_content_len]
+        tgt_ids = torch.tensor(tgt_ids, dtype=torch.int64)[:max_content_len]
 
-        processed_src = torch.cat([bs_id, src_ids, eos_id], 0)
-        processed_tgt = torch.cat([bs_id, tgt_ids, eos_id], 0)
+        src_list.append(torch.cat([bs_id, src_ids, eos_id], 0))
+        tgt_list.append(torch.cat([bs_id, tgt_ids, eos_id], 0))
 
-        src_list.append(
-            pad(processed_src, (0, max_padding - len(processed_src)), value=pad_id)
-        )
-        tgt_list.append(
-            pad(processed_tgt, (0, max_padding - len(processed_tgt)), value=pad_id)
-        )
-    return torch.stack(src_list), torch.stack(tgt_list)
+    # pad to the longest sentence in the batch instead of max_padding,
+    # padded positions are masked so the loss is the same
+    src_len = max(len(x) for x in src_list)
+    tgt_len = max(len(x) for x in tgt_list)
+    src = torch.stack([pad(x, (0, src_len - len(x)), value=pad_id) for x in src_list])
+    tgt = torch.stack([pad(x, (0, tgt_len - len(x)), value=pad_id) for x in tgt_list])
+    return src.to(device), tgt.to(device)
+
+
+class TokenBatchSampler(Sampler):
+    """
+    batches of similar length sentences with at most max_tokens (padded) tokens,
+    like fairseq --max-tokens instead of a fixed number of sentences
+    """
+
+    def __init__(self, lengths, max_tokens, shuffle=True, num_replicas=1, rank=0):
+        self.lengths = lengths
+        self.max_tokens = max_tokens
+        self.shuffle = shuffle
+        self.num_replicas = num_replicas
+        self.rank = rank
+        self.epoch = 0
+        self.batches = self._make_batches()
+
+    def set_epoch(self, epoch):
+        self.epoch = epoch
+        self.batches = self._make_batches()
+
+    def _make_batches(self):
+        rng = random.Random(42 + self.epoch)
+        order = list(range(len(self.lengths)))
+        if self.shuffle:
+            rng.shuffle(order)
+        # stable sort, equal lengths keep the shuffled order
+        order.sort(key=lambda i: self.lengths[i])
+
+        batches, batch, longest = [], [], 0
+        for i in order:
+            longest_if_added = max(longest, self.lengths[i])
+            if batch and longest_if_added * (len(batch) + 1) > self.max_tokens:
+                batches.append(batch)
+                batch, longest_if_added = [], self.lengths[i]
+            batch.append(i)
+            longest = longest_if_added
+        if batch:
+            batches.append(batch)
+
+        if self.shuffle:
+            rng.shuffle(batches)
+            # every gpu needs the same number of steps or ddp hangs
+            batches = batches[: len(batches) // self.num_replicas * self.num_replicas]
+        return batches[self.rank :: self.num_replicas]
+
+    def __iter__(self):
+        return iter(self.batches)
+
+    def __len__(self):
+        return len(self.batches)
 
 
 def create_dataloaders(
@@ -248,6 +391,7 @@ def create_dataloaders(
     batch_size=12000,
     max_padding=128,
     is_distributed=True,
+    max_tokens=None,
 ):
     def collate_fn(batch):
         return collate_batch(
@@ -260,6 +404,11 @@ def create_dataloaders(
         )
 
     train_data, valid_data, _ = load_fn()
+    if max_tokens is not None:
+        return _token_dataloaders(
+            train_data, valid_data, collate_fn, max_tokens, max_padding, is_distributed
+        )
+
     train_data = HFDatasetWrapper(train_data)
     valid_data = HFDatasetWrapper(valid_data)
 
@@ -279,5 +428,34 @@ def create_dataloaders(
         shuffle=(valid_sampler is None),
         sampler=valid_sampler,
         collate_fn=collate_fn,
+    )
+    return train_dataloader, valid_dataloader
+
+
+def _token_dataloaders(
+    train_data, valid_data, collate_fn, max_tokens, max_padding, is_distributed
+):
+    # needs pretokenized rows to know the lengths up front
+    def lengths(rows):
+        return [
+            min(max(len(r["src_ids"]), len(r["tgt_ids"])) + 2, max_padding)
+            for r in rows
+        ]
+
+    num_replicas, rank = 1, 0
+    if is_distributed:
+        num_replicas, rank = dist.get_world_size(), dist.get_rank()
+
+    train_sampler = TokenBatchSampler(
+        lengths(train_data), max_tokens, num_replicas=num_replicas, rank=rank
+    )
+    # every gpu evaluates the whole validation set, it is small
+    valid_sampler = TokenBatchSampler(lengths(valid_data), max_tokens, shuffle=False)
+
+    train_dataloader = DataLoader(
+        train_data, batch_sampler=train_sampler, collate_fn=collate_fn
+    )
+    valid_dataloader = DataLoader(
+        valid_data, batch_sampler=valid_sampler, collate_fn=collate_fn
     )
     return train_dataloader, valid_dataloader

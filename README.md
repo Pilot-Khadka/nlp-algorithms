@@ -80,8 +80,20 @@ Comparison between custom model implementation and PyTorch equivalents
 * Reported score uses the its repository’s custom BLEU calculation.
 * This repos custom implementation uses **sacreBLEU** for BLEU calculation.
 
+### machine translation (nepali->english)
+
+| Model                | Implementation               | Config (Key Hyperparams)                                              | Dataset        | Test BLEU |
+| -------------------- | ---------------------------- | --------------------------------------------------------------------- | -------------- | --------- |
+| **Transformer**      | [reported score from Duwal & Bal 2019](https://huggingface.co/datasets/sharad461/ne-en-parallel-208k) (fairseq) | 5L/5L, d=512, FF=2048, 8 heads, dropout=0.3, sinusoidal PE, joint SentencePiece BPE 2500, beam 5 | ne-en 208k, FLORES v1 devtest | **13.0** |
+| **Transformer**      | Custom                | 5L/5L, d=512, FF=2048, 8 heads, dropout=0.3, **RoPE**, joint byte-level BPE 4000, shared embeddings, ~16k tokens/batch, 100 epochs | ne-en 208k, FLORES+ devtest | 11.16 (greedy decoding) |
+| **Transformer**      | Custom                | same, last 5 checkpoints averaged, beam 5                             | ne-en 208k, FLORES+ devtest | **13.30** |
+
+* Both are trained on the same 208k parallel sentences (no back-translated data).
+* The reported score is on FLORES v1 devtest, this repo uses FLORES+ devtest (different sentences), so the scores are close but not the same test set.
+* Nepali text is normalized (Devanagari digits to ASCII, danda spacing, zero-width characters) and duplicate pairs are removed before training.
+
 ## roadmap
-- [ ] training seq-2-seq model on machine translation
+- [x] training seq-2-seq model on machine translation
 - [ ] benchmarking against pytorch/official models
 - [ ] add BERT as encoder only model
 - [ ] add GPT-2 as decoder only model

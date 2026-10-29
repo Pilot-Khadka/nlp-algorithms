@@ -50,6 +50,7 @@ class EncoderBlock(nn.Module):
         num_heads: int,
         d_ffn: int,
         dropout: float = 0.0,
+        attn_dropout: float | None = None,
     ):
         super().__init__()
         assert d_model % num_heads == 0
@@ -61,7 +62,7 @@ class EncoderBlock(nn.Module):
         self.out_proj = nn.Linear(d_model, d_model, bias=False)
         self.ffn = SwiGLUFFN(d_model, d_ffn)
         self.dropout = nn.Dropout(p=dropout)
-        self.attn_dropout = dropout
+        self.attn_dropout = dropout if attn_dropout is None else attn_dropout
 
     def forward(
         self, x: torch.Tensor, mask: torch.Tensor | None = None
@@ -99,6 +100,7 @@ class DecoderBlock(nn.Module):
         num_heads: int,
         d_ffn: int,
         dropout: float = 0.0,
+        attn_dropout: float | None = None,
     ):
         super().__init__()
         assert d_model % num_heads == 0
@@ -114,7 +116,7 @@ class DecoderBlock(nn.Module):
         self.cross_out = nn.Linear(d_model, d_model, bias=False)
         self.ffn = SwiGLUFFN(d_model, d_ffn)
         self.dropout = nn.Dropout(dropout)
-        self.attn_dropout = dropout
+        self.attn_dropout = dropout if attn_dropout is None else attn_dropout
 
     def forward(
         self,
@@ -183,6 +185,7 @@ class Encoder(nn.Module):
         d_ffn: int,
         num_layers: int,
         dropout: float = 0.0,
+        attn_dropout: float | None = None,
     ):
         super().__init__()
         self.layers = nn.ModuleList(
@@ -192,6 +195,7 @@ class Encoder(nn.Module):
                     num_heads=num_heads,
                     d_ffn=d_ffn,
                     dropout=dropout,
+                    attn_dropout=attn_dropout,
                 )
                 for _ in range(num_layers)
             ]
@@ -214,6 +218,7 @@ class Decoder(nn.Module):
         d_ffn: int,
         num_layers: int,
         dropout: float = 0.0,
+        attn_dropout: float | None = None,
     ):
         super().__init__()
         self.layers = nn.ModuleList(
@@ -223,6 +228,7 @@ class Decoder(nn.Module):
                     num_heads=num_heads,
                     d_ffn=d_ffn,
                     dropout=dropout,
+                    attn_dropout=attn_dropout,
                 )
                 for _ in range(num_layers)
             ]
@@ -294,6 +300,8 @@ def make_model(
     d_ff=2048,
     h=8,
     dropout=0.1,
+    attn_dropout=None,
+    shared_embeddings=False,
 ):
     c = copy.deepcopy
     # position = PositionalEncoding(d_model=d_model, dropout=dropout)
@@ -305,6 +313,7 @@ def make_model(
             d_ffn=d_ff,
             num_layers=N,
             dropout=dropout,
+            attn_dropout=attn_dropout,
         ),
         decoder=Decoder(
             d_model=d_model,
@@ -312,6 +321,7 @@ def make_model(
             d_ffn=d_ff,
             num_layers=N,
             dropout=dropout,
+            attn_dropout=attn_dropout,
         ),
         src_embed=nn.Sequential(
             Embeddings(
@@ -332,4 +342,9 @@ def make_model(
         lm_head=Generator(d_model, tgt_vocab),
     )
     init_weights(model=model, num_layers=N)
+    if shared_embeddings:
+        # joint vocab, one matrix for source, target and the output projection
+        assert src_vocab == tgt_vocab
+        model.tgt_embed[0].lut.weight = model.src_embed[0].lut.weight
+        model.lm_head.proj.weight = model.src_embed[0].lut.weight
     return model

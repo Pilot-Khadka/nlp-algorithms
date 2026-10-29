@@ -1,3 +1,4 @@
+import glob
 from os.path import exists
 
 import torch
@@ -5,45 +6,54 @@ import sacrebleu
 
 
 from nlp_algorithms.encoder_decoder.seq2seq import make_model
-from nlp_algorithms.encoder_decoder.train import greedy_decode
+from nlp_algorithms.encoder_decoder.train import greedy_decode, beam_search
 from nlp_algorithms.encoder_decoder.data import (
     load_vocab,
-    load_multi30k,
+    load_ne_en,
     Batch,
     create_dataloaders,
     collate_batch,
-    HFDatasetWrapper,
 )
-from torch.utils.data import DataLoader
 
 
-def load_trained_model():
-    vocab_src, vocab_tgt = load_vocab()
+def average_checkpoints(paths, out_path):
+    # average of the last epochs, usually better than a single checkpoint
+    states = [torch.load(p, map_location="cpu", weights_only=True) for p in paths]
+    avg = {k: sum(s[k].float() for s in states) / len(states) for k in states[0]}
+    torch.save(avg, out_path)
+    return avg
+
+
+def load_trained_model(prefix="checkpoint/ne_en/model_", keep_last=5):
+    vocab_src, vocab_tgt = load_vocab(
+        load_fn=load_ne_en, vocab_path="checkpoint/ne_en/vocab.pt"
+    )
+    # same model as train_encoder_decoder.py
     config = {
-        "batch_size": 32,
-        "distributed": False,
-        "num_epochs": 8,
-        "accum_iter": 10,
-        "base_lr": 1.0,
-        "max_padding": 72,
-        "warmup": 3000,
-        "num_layers": 6,
+        "num_layers": 5,
         "d_model": 512,
-        "file_prefix": "multi30k_model_",
+        "shared_embeddings": True,
     }
-    model_path = "multi30k_model_final.pt"
-    if not exists(model_path):
-        raise RuntimeError(f"Model at {model_path} not found")
+
+    model_path = f"{prefix}avg.pt"
+    if exists(model_path):
+        state = torch.load(model_path, map_location="cpu", weights_only=True)
+    else:
+        # train_model keeps the last keep_last epoch checkpoints
+        paths = sorted(glob.glob(f"{prefix}[0-9][0-9].pt"))[-keep_last:]
+        if not paths:
+            raise RuntimeError(f"No checkpoints found at {prefix}*.pt")
+        print("Averaging:", paths)
+        state = average_checkpoints(paths, model_path)
 
     model = make_model(
         len(vocab_src),
         len(vocab_tgt),
         N=config["num_layers"],
         d_model=config["d_model"],
+        shared_embeddings=config["shared_embeddings"],
     )
-    model.load_state_dict(
-        torch.load(model_path, map_location=torch.device("cpu"), weights_only=True)
-    )
+    model.load_state_dict(state)
     return model, vocab_src, vocab_tgt
 
 
@@ -54,11 +64,11 @@ def check_outputs(
     vocab_tgt,
     n_examples=15,
     pad_idx=2,
+    max_padding=256,
     eos_string="</s>",
 ):
     results = []
     for idx in range(n_examples):
-        print("\nExample %d ========\n" % idx)
         b = next(iter(valid_dataloader))
         rb = Batch(b[0], b[1], pad_idx)
 
@@ -75,9 +85,9 @@ def check_outputs(
             "Target Text (Ground Truth) : "
             + vocab_tgt.decode(tgt_ids).replace("\n", "")
         )
-        model_out = greedy_decode(model, rb.src, rb.src_mask, 72, 0)[0]
+        model_out = greedy_decode(model, rb.src, rb.src_mask, max_padding, 0)[0]
         model_ids = [x for x in model_out.tolist() if x != pad_idx]
-        model_txt = vocab_tgt.decode(model_ids).split(eos_string, 1)[0] + eos_string
+        model_txt = vocab_tgt.decode(model_ids).split(eos_string, 1)[0]
         print("Model Output               : " + model_txt.replace("\n", ""))
         results.append((rb, src_tokens, tgt_tokens, model_out, model_txt))
     return results
@@ -87,79 +97,73 @@ def calculate_bleu(
     model,
     vocab_src,
     vocab_tgt,
-    pad_idx=2,
-    max_padding=72,
-    eos_string="</s>",
+    max_padding=256,
+    beam_size=5,
+    len_penalty=1.2,
+    device=None,
 ):
-    device = torch.device("cpu")
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    pad_idx = vocab_src["<blank>"]
 
-    def collate_fn(batch):
-        return collate_batch(
-            batch,
-            vocab_src,
-            vocab_tgt,
-            device,
-            max_padding=max_padding,
-            pad_id=vocab_src["<blank>"],
-        )
-
-    _, _, test_data = load_multi30k()
-    test_dataloader = DataLoader(
-        HFDatasetWrapper(test_data),
-        batch_size=32,
-        shuffle=False,
-        collate_fn=collate_fn,
-    )
-
+    # flores devtest, the source is normalized by load_ne_en, the references are not
+    _, _, test_data = load_ne_en()
+    references = list(test_data["tgt"])
     hypotheses = []
-    references = []
 
-    model.eval()
+    model.to(device).eval()
     with torch.no_grad():
-        for b in test_dataloader:
-            rb = Batch(b[0], b[1], pad_idx)
-            for i in range(rb.src.shape[0]):
-                src = rb.src[i].unsqueeze(0)
-                src_mask = rb.src_mask[i].unsqueeze(0)
-
+        for row in test_data:
+            src, _ = collate_batch(
+                [row],
+                vocab_src,
+                vocab_tgt,
+                device,
+                max_padding=max_padding,
+                pad_id=pad_idx,
+            )
+            src_mask = (src != pad_idx).unsqueeze(-2)
+            if beam_size > 1:
+                model_out = beam_search(
+                    model,
+                    src,
+                    src_mask,
+                    max_padding,
+                    start_symbol=0,
+                    beam_size=beam_size,
+                    len_penalty=len_penalty,
+                )[0]
+            else:
                 model_out = greedy_decode(
                     model, src, src_mask, max_padding, start_symbol=0
                 )[0]
-
-                model_ids = [x for x in model_out.tolist() if x != pad_idx]
-                hypothesis = vocab_tgt.decode(model_ids).split(eos_string, 1)[0].strip()
-
-                tgt_ids = [x for x in rb.tgt[i].tolist() if x != pad_idx]
-                reference = vocab_tgt.decode(tgt_ids).split(eos_string, 1)[0].strip()
-
-                hypotheses.append(hypothesis)
-                references.append(reference)
+            # decode drops <s>, </s> and <blank>
+            hypotheses.append(vocab_tgt.decode(model_out.tolist()).strip())
 
     result = sacrebleu.corpus_bleu(hypotheses, [references])
     return result
 
 
 def run_model_example(n_examples=5):
-    print("Loading vocabulary ...")
     model, vocab_src, vocab_tgt = load_trained_model()
 
-    print("Preparing validation dataloader ...")
     _, valid_dataloader = create_dataloaders(
-        torch.device("cpu"),
-        vocab_src,
-        vocab_tgt,
+        device=torch.device("cpu"),
+        vocab_src=vocab_src,
+        vocab_tgt=vocab_tgt,
         batch_size=1,
         is_distributed=False,
+        load_fn=load_ne_en,
     )
 
-    # print("Checking Model Outputs:")
-    # example_data = check_outputs(
-    #     valid_dataloader, model, vocab_src, vocab_tgt, n_examples=n_examples
-    # )
+    model.eval()
+    example_data = check_outputs(
+        valid_dataloader, model, vocab_src, vocab_tgt, n_examples=n_examples
+    )
 
-    print("\nComputing BLEU score on test set ...")
     bleu = calculate_bleu(model, vocab_src, vocab_tgt)
     print(f"Test BLEU Score: {bleu.score:.2f}")
+    print(bleu)
 
 
 if __name__ == "__main__":

@@ -6,13 +6,13 @@ from nlp_algorithms.encoder_decoder.train import train_model
 
 def tune_and_train(
     load_fn=load_ne_en,
-    vocab_path="ne_en_vocab.pt",
+    vocab_path="checkpoint/ne_en/vocab.pt",
     n_random_trials: int = 30,
     n_bayesian_trials: int = 100,
     data_fraction: float = 0.02,
     num_epochs_per_trial: int = 5,
     num_final_epochs: int = 8,
-    output_prefix: str = "ne_en_model_tuned_",
+    output_prefix: str = "checkpoint/ne_en/tuned/model_",
 ) -> dict:
     n_gpus = torch.cuda.device_count()
     devices = (
