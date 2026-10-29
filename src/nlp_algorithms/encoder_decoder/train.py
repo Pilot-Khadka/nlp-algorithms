@@ -158,8 +158,11 @@ def train_worker(
         is_distributed=is_distributed,
     )
 
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=config["base_lr"], betas=(0.9, 0.98), eps=1e-9
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=config["base_lr"],
+        betas=(0.9, 0.98),
+        eps=1e-9,
     )
     lr_scheduler = LambdaLR(
         optimizer=optimizer,
@@ -232,7 +235,7 @@ def _decode_ids(ids, vocab, pad_idx=2):
     ids = ids.tolist() if hasattr(ids, "tolist") else ids
     if 1 in ids:
         ids = ids[: ids.index(1)]
-    return vocab.decode([i for i in ids if i > 2])
+    return vocab.decode([i for i in ids if i != pad_idx and i not in (0, 1)])
 
 
 def overfit_subset(
@@ -265,6 +268,8 @@ def overfit_subset(
     )
 
     pad_idx = vocab_tgt["<blank>"]
+    src_pad_idx = vocab_src["<blank>"]
+
     model = make_model(len(vocab_src), len(vocab_tgt), N=num_layers, d_model=d_model)
     model.to(device)
 
@@ -303,7 +308,7 @@ def overfit_subset(
             with torch.no_grad():
                 for i in range(min(n_samples, 5)):
                     src = src_batch[i].unsqueeze(0)
-                    src_mask = (src != pad_idx).unsqueeze(-2)
+                    src_mask = (src != src_pad_idx).unsqueeze(-2)
                     model_out = greedy_decode(
                         model, src, src_mask, max_padding, start_symbol=0
                     )[0]

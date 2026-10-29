@@ -18,6 +18,7 @@ external/
 test_seq2seq/
 *.pt
 *.pth
+kaggle_scripts/
 
 
 

@@ -3,6 +3,7 @@ from pathlib import Path
 
 import torch
 import numpy as np
+from tqdm import tqdm
 from datasets import load_dataset, load_from_disk, DatasetDict
 from datasets import Dataset as HFDataset
 
@@ -188,6 +189,16 @@ def load_vocab(load_fn, vocab_path, vocab_size=BPE_VOCAB_SIZE):
     return vocab_src, vocab_tgt
 
 
+def pretokenize(rows, vocab_src, vocab_tgt):
+    return [
+        {
+            "src_ids": vocab_src.encode(row["src"]),
+            "tgt_ids": vocab_tgt.encode(row["tgt"]),
+        }
+        for row in tqdm(rows, desc="tokenizing")
+    ]
+
+
 def collate_batch(
     batch,
     vocab_src,
@@ -203,12 +214,19 @@ def collate_batch(
     max_content_len = max_padding - 2  # reserve slots for BOS + EOS
 
     for sample in batch:
-        src_ids = torch.tensor(
-            vocab_src.encode(sample["src"]), dtype=torch.int64, device=device
-        )[:max_content_len]
-        tgt_ids = torch.tensor(
-            vocab_tgt.encode(sample["tgt"]), dtype=torch.int64, device=device
-        )[:max_content_len]
+        # samples from pretokenize() already have ids
+        if "src_ids" in sample:
+            src_ids, tgt_ids = sample["src_ids"], sample["tgt_ids"]
+        else:
+            src_ids = vocab_src.encode(sample["src"])
+            tgt_ids = vocab_tgt.encode(sample["tgt"])
+
+        src_ids = torch.tensor(src_ids, dtype=torch.int64, device=device)[
+            :max_content_len
+        ]
+        tgt_ids = torch.tensor(tgt_ids, dtype=torch.int64, device=device)[
+            :max_content_len
+        ]
 
         processed_src = torch.cat([bs_id, src_ids, eos_id], 0)
         processed_tgt = torch.cat([bs_id, tgt_ids, eos_id], 0)

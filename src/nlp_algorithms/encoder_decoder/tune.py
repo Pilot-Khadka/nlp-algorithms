@@ -12,7 +12,7 @@ from torch.optim.lr_scheduler import LambdaLR
 
 from .seq2seq import make_model
 from .loss import SimpleLossCompute, LabelSmoothing
-from .data import rate, create_dataloaders, Batch
+from .data import rate, create_dataloaders, pretokenize, Batch
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -24,7 +24,9 @@ def _fmt_duration(seconds: float) -> str:
     return f"{m}m{s:02d}s" if m < 60 else f"{m // 60}h{m % 60:02d}m"
 
 
-def _make_cached_subsample_fn(load_fn, fraction: float, seed: int = 42):
+def _make_cached_subsample_fn(
+    load_fn, vocab_src, vocab_tgt, fraction: float, seed: int = 42
+):
     _cache: dict = {}
 
     @functools.wraps(load_fn)
@@ -39,8 +41,10 @@ def _make_cached_subsample_fn(load_fn, fraction: float, seed: int = 42):
             rng = random.Random(seed)
             rng.shuffle(full_train)
 
-            _cache["train"] = full_train
-            _cache["val"] = list(val_raw)
+            # bpe encoding is slow, do it once instead of every epoch
+            n_train = max(1, int(len(full_train) * fraction))
+            _cache["train"] = pretokenize(full_train[:n_train], vocab_src, vocab_tgt)
+            _cache["val"] = pretokenize(val_raw, vocab_src, vocab_tgt)
             _cache["test"] = test_raw
             print(
                 f"Loaded {len(_cache['train'])} train / {len(_cache['val'])} val "
@@ -48,8 +52,7 @@ def _make_cached_subsample_fn(load_fn, fraction: float, seed: int = 42):
                 flush=True,
             )
 
-        n_train = max(1, int(len(_cache["train"]) * fraction))
-        return _cache["train"][:n_train], _cache["val"], _cache["test"]
+        return _cache["train"], _cache["val"], _cache["test"]
 
     return wrapped
 
@@ -67,7 +70,8 @@ def _run_trial(
 ) -> float:
     device = devices[trial.number % len(devices)]
 
-    lr = trial.suggest_float("lr", 1e-5, 1e-1, log=True)
+    # multiplied by rate(), same as base_lr in train.py
+    lr = trial.suggest_float("lr", 0.1, 5.0, log=True)
     batch_size = trial.suggest_categorical("batch_size", [16, 32, 64])
     num_layers = trial.suggest_int("num_layers", 2, 6)
     d_model = trial.suggest_categorical("d_model", [128, 256, 512])
@@ -211,6 +215,8 @@ def tune_hyperparameters(
     study_name: str = "seq2seq_tuning",
     storage: Optional[str] = "sqlite:///seq2seq_tuning.db",
     devices: Optional[list[torch.device]] = None,
+    n_trials: Optional[int] = None,
+    seed: int = 42,
 ) -> dict:
     if devices is None:
         n = torch.cuda.device_count()
@@ -220,7 +226,9 @@ def tune_hyperparameters(
             else [torch.device("cpu")]
         )
 
-    subsampled_fn = _make_cached_subsample_fn(load_fn, fraction=data_fraction)
+    subsampled_fn = _make_cached_subsample_fn(
+        load_fn, vocab_src, vocab_tgt, fraction=data_fraction
+    )
     total_trials = n_random_trials + n_bayesian_trials
 
     # n_startup_trials maps directly to the random exploration phase before TPE takes over
@@ -228,7 +236,7 @@ def tune_hyperparameters(
     sampler = TPESampler(
         n_startup_trials=n_random_trials,
         multivariate=True,
-        seed=42,
+        seed=seed,
         constant_liar=True,
     )
 
@@ -268,7 +276,8 @@ def tune_hyperparameters(
 
     study.optimize(
         objective,
-        n_trials=total_trials,
+        # per process, other processes can share the same storage
+        n_trials=n_trials or total_trials,
         n_jobs=len(devices),
         catch=(RuntimeError,),
     )
