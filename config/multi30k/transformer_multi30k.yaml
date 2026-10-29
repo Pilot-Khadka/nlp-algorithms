@@ -1,0 +1,33 @@
+dataset:
+  name: multi30k
+
+tokenizer:
+  name: bpe
+  vocab_size: 8192
+  joint: false
+  vocab_path: checkpoint/multi30k/vocab.pt
+
+model:
+  name: transformer
+  num_layers: 6
+  d_model: 512
+  dropout: 0.1
+  shared_embeddings: false
+
+train:
+  epochs: 8
+  batch_size: 32
+  max_padding: 72
+  accum_iter: 10
+  learning_rate: 1.0
+  warmup: 3000
+  label_smoothing: 0.1
+  multi_gpu: false
+  checkpoint_dir: checkpoint/multi30k
+
+task:
+  name: machine_translation
+  metrics:
+    - bleu
+  beam_size: 5
+  len_penalty: 1.2

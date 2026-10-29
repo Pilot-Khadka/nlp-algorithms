@@ -128,6 +128,34 @@ def load_multi30k(src_lang="de", tgt_lang="en"):
     return dataset["train"], dataset["validation"], dataset["test"]
 
 
+def load_tatoeba(data_dir, url):
+    # tatoeba challenge release: {train,dev,test}.{src,trg}, one sentence per line
+    from nlp_algorithms.dataset.downloader.tatoeba import TatoebaDownloader
+
+    TatoebaDownloader.download_and_prepare(
+        {"dataset": {"data_dir": data_dir, "url": url}}
+    )
+
+    def read_lines(path):
+        # only \n ends a line, a stray \r would shift src against tgt
+        with open(path, encoding="utf-8", newline="\n") as f:
+            return [line.rstrip("\n") for line in f]
+
+    def read_split(split):
+        src = read_lines(os.path.join(data_dir, f"{split}.src"))
+        tgt = read_lines(os.path.join(data_dir, f"{split}.trg"))
+        if len(src) != len(tgt):
+            raise ValueError(f"{split}: {len(src)} src lines but {len(tgt)} tgt lines")
+        return HFDataset.from_dict({"src": src, "tgt": tgt})
+
+    has_dev = os.path.exists(os.path.join(data_dir, "dev.src"))
+    return (
+        read_split("train"),
+        read_split("dev" if has_dev else "test"),
+        read_split("test"),
+    )
+
+
 _ZERO_WIDTH = re.compile("[​‌‍﻿]")
 _DEVA_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
 

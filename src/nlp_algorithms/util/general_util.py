@@ -181,3 +181,18 @@ def resolve_tokenizer_path(config, key):
         )
 
     return pickle_path
+
+
+def resolve_checkpoint_dir(config):
+    """train.checkpoint_dir, else checkpoint/<dataset>/<config file name>"""
+    checkpoint_dir = config.get("train", {}).get("checkpoint_dir")
+    if checkpoint_dir is None:
+        name = config.get("config_name") or f"{config.task.name}_{config.model.name}"
+        checkpoint_dir = os.path.join("checkpoint", config.dataset.name, name)
+    return checkpoint_dir
+
+
+def unwrap_model(model):
+    # ddp wraps in .module, torch.compile in ._orig_mod
+    model = getattr(model, "module", model)
+    return getattr(model, "_orig_mod", model)

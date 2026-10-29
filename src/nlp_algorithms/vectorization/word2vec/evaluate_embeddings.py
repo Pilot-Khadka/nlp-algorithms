@@ -1,8 +1,6 @@
 import torch
 import numpy as np
 
-# pyrefly: ignore [missing-import]
-import gensim.downloader as api
 from scipy.stats import spearmanr
 from sklearn.metrics.pairwise import cosine_similarity
 

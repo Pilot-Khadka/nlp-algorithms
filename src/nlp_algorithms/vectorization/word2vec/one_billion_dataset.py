@@ -1,7 +1,8 @@
-from collections import Counter
 import os
 import tarfile
 import urllib.request
+from collections import Counter
+
 from tqdm import tqdm
 
 
@@ -34,8 +35,7 @@ def download_and_extract_obw(dest_dir="./1billion_word"):
         with DownloadProgressBar(
             unit="B", unit_scale=True, miniters=1, desc=filename
         ) as pbar:
-            urllib.request.urlretrieve(
-                url, tar_path, reporthook=pbar.update_to)
+            urllib.request.urlretrieve(url, tar_path, reporthook=pbar.update_to)
         print("Download complete.")
     else:
         print("Archive already exists. Skipping download.")

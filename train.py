@@ -1,4 +1,5 @@
 import argparse
+from pathlib import Path
 
 
 def main():
@@ -18,6 +19,8 @@ def main():
 
     config = load_config(path=args.path)
     config.show_progress = args.verbose
+    # checkpoints go to checkpoint/<dataset>/<config name> unless train.checkpoint_dir is set
+    config.config_name = Path(args.path).stem
     run_training(config)
 
 

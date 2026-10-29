@@ -1,8 +1,6 @@
 from typing import Dict, Any, Optional, FrozenSet, Callable
 import importlib
-import pkgutil
-
-from nlp_algorithms.util.path_util import get_project_base_path
+from pathlib import Path
 
 _REGISTRY: Dict[str, Any] = {}
 RegistryEntry = Dict[str, Any]
@@ -59,19 +57,21 @@ register_downloader = _create_register("downloader")
 
 def autoregister():
     """used to discover registerable files (do not delete)"""
-    import sys
+    import nlp_algorithms
 
-    root = get_project_base_path()
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
-
-    for module in pkgutil.walk_packages(path=[str(root)]):
-        if module.ispkg:
-            continue  # skip packages, only import .py files
+    # walk the package, not the repo root, and only import files that register
+    # something, importing every module is slow and runs their top level code
+    root = Path(nlp_algorithms.__file__).parent
+    for path in sorted(root.rglob("*.py")):
+        if "@register_" not in path.read_text(encoding="utf-8"):
+            continue
+        name = ".".join(
+            ("nlp_algorithms",) + path.relative_to(root).with_suffix("").parts
+        )
         try:
-            importlib.import_module(module.name)
+            importlib.import_module(name)
         except Exception as e:
-            print(f"[WARN] Skipped {module.name}: {e}")
+            print(f"[WARN] Skipped {name}: {e}")
 
 
 def get_from_registry(

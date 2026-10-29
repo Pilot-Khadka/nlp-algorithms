@@ -1,65 +1,71 @@
-import numpy as np
-# from skipgram import Skipgram
+import torch
+import torch.nn as nn
+import torch.optim as optim
 
 
-class LogisticRegression:
+class SkipGramNS(nn.Module):
     def __init__(self, vocab_size, embedding_dim):
+        super().__init__()
         self.vocab_size = vocab_size
         self.embedding_dim = embedding_dim
-        self.losses = []
-        self.lr = 5e-4
-        self._init_embedding()
 
-    def _init_embedding(self):
-        # goal is to maximize dot product between vectors that come together and minimize that dont
-        self.input_embedding = np.random.uniform(
-            -1, 1, (self.vocab_size, self.embedding_dim)
-        )
-        self.output_embedding = np.random.uniform(
-            -1, 1, (self.vocab_size, self.embedding_dim)
-        )
+        # input embeddings: center words
+        self.in_embed = nn.Embedding(vocab_size, embedding_dim)
+        # output embeddings: context words
+        self.out_embed = nn.Embedding(vocab_size, embedding_dim)
 
-    def train(self, dataset, epochs=30):
-        for epoch in range(epochs):
-            total_loss = 0
-            for center_idx, context_idx, label in dataset:
-                center_vector = self.input_embedding[center_idx]
-                context_vector = self.output_embedding[context_idx]
-                score = np.dot(center_vector, context_vector)
-                probab = self._sigmoid(score)
+        nn.init.uniform_(self.in_embed.weight, -1.0, 1.0)
+        nn.init.uniform_(self.out_embed.weight, -1.0, 1.0)
 
-                loss = -(label * np.log(probab) + (1 - label) * np.log(1 - probab))
-                total_loss += loss
+    def forward(self, center_words, context_words, labels):
+        # shape: (B, D)
+        center_embeds = self.in_embed(center_words)
+        context_embeds = self.out_embed(context_words)
 
-                grad = probab - label
-                self.input_embedding[center_idx] -= self.lr * grad * context_vector
-                self.output_embedding[context_idx] = self.lr * grad * center_vector
-            self.losses.append(total_loss)
-            print(f"Epoch {epoch + 1}, Loss: {total_loss:.4f}")
+        scores = torch.sum(center_embeds * context_embeds, dim=1)
+        probs = torch.sigmoid(scores)
 
-    def _sigmoid(self, x):
-        if x >= 0:  # stable
-            z = np.exp(-x)
-            return 1 / (1 + z)
-        else:
-            z = np.exp(x)
-            return z / (1 + z)
+        loss = nn.functional.binary_cross_entropy(probs, labels.float())
+        return loss
+
+
+def train_skipgram(model, dataset, epochs=10, lr=0.01, batch_size=4):
+    optimizer = optim.SGD(model.parameters(), lr=lr)
+    dataset_tensor = torch.tensor(dataset, dtype=torch.long)
+
+    for epoch in range(epochs):
+        total_loss = 0
+        perm = torch.randperm(len(dataset_tensor))
+        dataset_tensor = dataset_tensor[perm]
+
+        for i in range(0, len(dataset_tensor), batch_size):
+            batch = dataset_tensor[i : i + batch_size]
+            center, context, label = batch[:, 0], batch[:, 1], batch[:, 2]
+
+            optimizer.zero_grad()
+            loss = model(center, context, label)
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item() * len(batch)
+
+        print(f"Epoch {epoch + 1}, Loss: {total_loss:.4f}")
 
 
 def main():
-    # model = Skipgram()
-    # dataset = model.build_dataset()
-
-    # input -> length of vocabulary
-    # i.e
-    example_dataset = [
-        (10, 20, 1),  # Positive pair
-        (15, 30, 0),  # Negative sample
-        (25, 40, 1),  # Positive pair
-        (35, 50, 0),  # Negative sample
+    dataset = [
+        (10, 20, 1),
+        (15, 30, 0),
+        (25, 40, 1),
+        (35, 50, 0),
     ]
-    regression_model = LogisticRegression(vocab_size=10000, embedding_dim=300)
-    regression_model.train(example_dataset)
+    vocab_size = 100
+    embedding_dim = 50
+
+    model = SkipGramNS(vocab_size, embedding_dim)
+    train_skipgram(model, dataset, epochs=20, lr=0.05)
+    print("Sample embedding for word 10:", model.in_embed.weight[10])
 
 
-main()
+if __name__ == "__main__":
+    main()

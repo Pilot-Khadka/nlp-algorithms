@@ -120,6 +120,12 @@ def run_training(config):
     inputs:
         config: Training configuration object
     """
+    if config.task.name == "machine_translation":
+        # the encoder-decoder has its own pipeline (token batches, ddp, beam search)
+        from nlp_algorithms.training.machine_translation import run_machine_translation
+
+        return run_machine_translation(config)
+
     multi_gpu = config.train.get("multi_gpu", False)
     gpu_id = config.get("gpu_id", 0)
 

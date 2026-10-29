@@ -38,10 +38,28 @@ class TrainerBundle:
     metric_names: list
 
 
-def get_dataset_filename(task, base_dataset_name, max_len, extra=""):
-    key = f"{task}_{base_dataset_name}_{max_len}_{extra}"
+def get_dataset_filename(config, vocab, extra=""):
+    # the cached ids depend on all of these, a change in any of them needs a new file
+    # (the vocab hash also catches a retrained tokenizer with the same settings)
+    dataset = config.dataset
+    vocab_hash = hashlib.md5(
+        repr(sorted(vocab.token_to_id.items(), key=lambda x: x[1])).encode()
+    ).hexdigest()
+    key = "_".join(
+        str(x)
+        for x in [
+            config.task.name,
+            dataset.name,
+            dataset.get("data_dir"),
+            dataset.sequence_length,
+            dataset.get("max_samples"),
+            config.tokenizer.name,
+            vocab_hash,
+            extra,
+        ]
+    )
     hash_str = hashlib.md5(key.encode()).hexdigest()[:8]  # 8-char hash
-    return f"data/preprocessed/{task}_{hash_str}.pt"
+    return f"data/preprocessed/{config.task.name}_{hash_str}.pt"
 
 
 class TrainerBuilder:
@@ -165,15 +183,13 @@ class TrainerBuilder:
 
     def build_standard_dataloaders(self, data_bundle) -> tuple[DataLoader, DataLoader]:
         train_name = get_dataset_filename(
-            task=self.config.task.name,
-            base_dataset_name=self.config.dataset.name,
-            max_len=self.config.dataset.sequence_length,
+            config=self.config,
+            vocab=data_bundle.vocab,
             extra="train",
         )
         test_name = get_dataset_filename(
-            task=self.config.task.name,
-            base_dataset_name=self.config.dataset.name,
-            max_len=self.config.dataset.sequence_length,
+            config=self.config,
+            vocab=data_bundle.vocab,
             extra="test",
         )
 

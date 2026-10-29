@@ -1,0 +1,41 @@
+# close to duwal & bal 2019 (fairseq, 13.0 bleu ne->en on the same 208k pairs)
+dataset:
+  name: ne_en
+
+tokenizer:
+  name: bpe
+  vocab_size: 4000
+  joint: true # one bpe for ne and en, needed for shared embeddings
+  sample_size: 60000 # bpe training does not fit in memory on the full corpus
+  vocab_path: checkpoint/ne_en/vocab.pt
+
+model:
+  name: transformer
+  num_layers: 5
+  d_model: 512
+  dropout: 0.3
+  attn_dropout: 0.1
+  shared_embeddings: true
+
+train:
+  epochs: 100
+  max_hours: 10
+  batch_size: 32
+  max_tokens: 8000 # per gpu, ~16k tokens per update on 2 gpus
+  max_padding: 256
+  accum_iter: 1
+  learning_rate: 1.43 # multiplier on rate(), peak lr ~1e-3 after warmup
+  warmup: 4000
+  label_smoothing: 0.1
+  weight_decay: 1e-4
+  multi_gpu: true
+  keep_last: 5
+  log_every: 200
+  checkpoint_dir: checkpoint/ne_en
+
+task:
+  name: machine_translation
+  metrics:
+    - bleu
+  beam_size: 5
+  len_penalty: 1.2

@@ -29,14 +29,33 @@ dataset:
   # data_dir: dataset/dataset_tatoeba_eng_deu/
 
 
+tokenizer:
+  name: bpe
+  vocab_size: 8192
+  joint: true
+  sample_size: 60000 # bpe training does not fit in memory on the full corpus
+
 model:
-  name: seq2seq
+  name: transformer
+  num_layers: 6
+  d_model: 512
+  dropout: 0.1
+  shared_embeddings: true
+
 task:
   name: machine_translation
   metrics:
+    - bleu
+  beam_size: 5
+  len_penalty: 1.2
 
 train:
   epochs: 15
   batch_size: 64
+  max_tokens: 8000
+  max_padding: 128
   multi_gpu: true
-  learning_rate: 1e-3
+  learning_rate: 1.0 # multiplier on rate()
+  warmup: 4000
+  keep_last: 5
+  checkpoint_dir: checkpoint/tatoeba_eng_nep

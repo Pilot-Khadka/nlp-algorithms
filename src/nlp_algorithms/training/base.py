@@ -5,10 +5,13 @@ This can be solved by shuffling the train dataset but need to check for language
 
 from abc import ABC, abstractmethod
 
+import os
+
 import torch
 import torch.distributed as dist
 
 from nlp_algorithms.util.logger import setup_logging
+from nlp_algorithms.util.general_util import resolve_checkpoint_dir, unwrap_model
 
 
 class BaseTrainer(ABC):
@@ -39,6 +42,7 @@ class BaseTrainer(ABC):
         self.best_valid_loss = float("inf")
         self._avg_train_time = 0.0
         self._avg_val_time = 0.0
+        self.checkpoint_dir = resolve_checkpoint_dir(config)
 
     def train(self) -> None:
         for epoch in range(self.config.train.epochs):
@@ -67,9 +71,18 @@ class BaseTrainer(ABC):
                 )
                 if avg_valid_loss < self.best_valid_loss:
                     self.best_valid_loss = avg_valid_loss
+                    self.save_model("model_best.pt")
 
             if self.use_ddp:
                 dist.barrier()
+
+        if self.is_main:
+            self.save_model("model_final.pt")
+
+    def save_model(self, file_name: str) -> None:
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
+        path = os.path.join(self.checkpoint_dir, file_name)
+        torch.save(unwrap_model(self.model).state_dict(), path)
 
     def _tqdm_format_metrics(self, metrics: dict, max_items: int = 3) -> str:
         if not metrics:
