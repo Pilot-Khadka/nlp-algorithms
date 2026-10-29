@@ -176,7 +176,7 @@ def build_vocabulary(load_fn, vocab_size=BPE_VOCAB_SIZE):
     return Vocab(bpe_src), Vocab(bpe_tgt)
 
 
-def load_vocab(load_fn, vocab_path="vocab.pt", vocab_size=BPE_VOCAB_SIZE):
+def load_vocab(load_fn, vocab_path, vocab_size=BPE_VOCAB_SIZE):
     if not exists(vocab_path):
         vocab_src, vocab_tgt = build_vocabulary(load_fn, vocab_size)
         torch.save((vocab_src, vocab_tgt), vocab_path)
@@ -193,20 +193,22 @@ def collate_batch(
     vocab_src,
     vocab_tgt,
     device,
-    max_padding=128,
+    max_padding=512,
     pad_id=2,
 ):
     bs_id = torch.tensor([0], device=device)
     eos_id = torch.tensor([1], device=device)
     src_list, tgt_list = [], []
 
+    max_content_len = max_padding - 2  # reserve slots for BOS + EOS
+
     for sample in batch:
         src_ids = torch.tensor(
             vocab_src.encode(sample["src"]), dtype=torch.int64, device=device
-        )
+        )[:max_content_len]
         tgt_ids = torch.tensor(
             vocab_tgt.encode(sample["tgt"]), dtype=torch.int64, device=device
-        )
+        )[:max_content_len]
 
         processed_src = torch.cat([bs_id, src_ids, eos_id], 0)
         processed_tgt = torch.cat([bs_id, tgt_ids, eos_id], 0)
@@ -217,7 +219,6 @@ def collate_batch(
         tgt_list.append(
             pad(processed_tgt, (0, max_padding - len(processed_tgt)), value=pad_id)
         )
-
     return torch.stack(src_list), torch.stack(tgt_list)
 
 
