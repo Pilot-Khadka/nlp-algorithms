@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
 
-from nlp_algorithms.attention import MultiHeadAttention
+from nlp_algorithms.attention.attention import MultiHeadSelfAttention
 from nlp_algorithms.net_common import PositionalEncoding
+from nlp_algorithms.engine.registry import register_model
 
 
 class FeedForward(nn.Module):
@@ -16,14 +17,14 @@ class FeedForward(nn.Module):
 
 
 class EncoderLayer(nn.Module):
-    def __init__(self, d_model, num_heads, d_ff):
+    def __init__(self, d_model, num_heads, d_ff, dropout=0.1):
         super().__init__()
-        self.attention = MultiHeadAttention(d_model, num_heads)
+        self.attention = MultiHeadSelfAttention(d_model, num_heads)
         self.ff = FeedForward(d_model, d_ff)
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
-        self.dropout1 = nn.Dropout(0.1)
-        self.dropout2 = nn.Dropout(0.1)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
 
     def forward(self, x, mask=None):
         attn_out = self.attention(self.norm1(x), mask)
@@ -59,6 +60,7 @@ class EncoderBlock(nn.Module):
         return x
 
 
+@register_model("bert")
 class BERT(nn.Module):
     def __init__(
         self,
@@ -83,8 +85,10 @@ class BERT(nn.Module):
         self.layer_norm = nn.LayerNorm(d_model)
 
         self.encoder_layers = nn.ModuleList(
-            [EncoderLayer(d_model, num_heads, d_ff) for _ in range(num_layers)]
+            [EncoderLayer(d_model, num_heads, d_ff, dropout) for _ in range(num_layers)]
         )
+        # the layers are pre-norm, so the last output is not normalized yet
+        self.final_norm = nn.LayerNorm(d_model)
 
         self.mlm_head = nn.Sequential(
             nn.Linear(d_model, d_model),
@@ -92,7 +96,21 @@ class BERT(nn.Module):
             nn.LayerNorm(d_model),
             nn.Linear(d_model, vocab_size),
         )
-        # TODO add nsp
+        # nsp classifies the [CLS] output after a tanh pooler: is B the next segment of A
+        self.pooler = nn.Sequential(nn.Linear(d_model, d_model), nn.Tanh())
+        self.nsp_head = nn.Linear(d_model, 2)
+
+        self.apply(self._init_weights)
+        # the mlm decoder shares weights with the token embedding
+        self.mlm_head[-1].weight = self.token_embedding.weight
+
+    @staticmethod
+    def _init_weights(module):
+        # bert init, N(0, 0.02) instead of the default N(0, 1) embeddings
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        if isinstance(module, nn.Linear) and module.bias is not None:
+            nn.init.zeros_(module.bias)
 
     def forward(
         self,
@@ -119,12 +137,9 @@ class BERT(nn.Module):
         embeddings = self.dropout(embeddings)
 
         if attention_mask is not None:
-            extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-            extended_attention_mask = extended_attention_mask.expand(
-                batch_size, 1, seq_len, seq_len
-            ).float()
-            # invert the mask: 1.0 for positions we want to attend, 0.0 for masked positions
-            extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+            # True = attend, (batch, 1, 1, seq) broadcasts over heads and queries
+            # a bool mask works with sdpa in fp16/bf16, a float32 one does not
+            extended_attention_mask = attention_mask.bool().unsqueeze(1).unsqueeze(2)
         else:
             extended_attention_mask = None
 
@@ -133,9 +148,11 @@ class BERT(nn.Module):
         for layer in self.encoder_layers:
             hidden_states = layer(hidden_states, extended_attention_mask)
 
-        sequence_output = hidden_states
+        sequence_output = self.final_norm(hidden_states)
 
-        return sequence_output
+        mlm_logits = self.mlm_head(sequence_output)
+        nsp_logits = self.nsp_head(self.pooler(sequence_output[:, 0]))
+        return mlm_logits, nsp_logits
 
 
 if __name__ == "__main__":

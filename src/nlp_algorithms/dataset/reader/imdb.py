@@ -1,7 +1,8 @@
 from typing import Dict, List, Optional
 
 import os
-from tqdm import tqdm
+import glob
+import polars as pl
 from torch.utils.data import Dataset
 
 
@@ -23,7 +24,7 @@ class IMDBDataset(Dataset):
         if not os.path.exists(prepared_flag):
             raise RuntimeError(
                 f"IMDB data not prepared in {data_dir}. "
-                f"Call IMDBDownloader.download_and_prepare(cfg) first."
+                f"Call ImdbDownloader.download_and_prepare(cfg) first."
             )
 
         examples = self._load_raw_data()
@@ -33,36 +34,23 @@ class IMDBDataset(Dataset):
         self.examples = examples
 
     def _load_raw_data(self) -> List[Dict[str, str]]:
-        split_dir = os.path.join(self.data_dir, self.split)
-        pos_path = os.path.join(split_dir, "pos")
-        neg_path = os.path.join(split_dir, "neg")
-
-        if not os.path.exists(pos_path) or not os.path.exists(neg_path):
-            raise FileNotFoundError(
-                f"Split '{self.split}' not found in {self.data_dir}. "
-                f"Expected {pos_path} and {neg_path}"
-            )
-
-        examples = []
+        # "train+unsupervised" reads both
         files = []
-        for label, folder in [(1, pos_path), (0, neg_path)]:
-            for file in sorted(os.listdir(folder)):
-                if file.endswith(".txt"):
-                    files.append((label, os.path.join(folder, file)))
-
-        for label, path in tqdm(files, desc=f"Loading IMDB {self.split}"):
-            with open(path, "r", encoding="utf-8") as f:
-                text = f.read().strip().replace("\n", " ")
-                examples.append(
-                    {
-                        "text": text,
-                        "label": label,
-                        "path": path,
-                    }
+        for split in self.split.split("+"):
+            found = sorted(glob.glob(os.path.join(self.data_dir, f"{split}-*.parquet")))
+            if not found:
+                raise FileNotFoundError(
+                    f"Split '{split}' not found in {self.data_dir}. "
+                    f"Expected {split}-*.parquet"
                 )
+            files.extend(found)
 
-        # pyrefly: ignore [bad-return]
-        return examples
+        # text, label (0 neg, 1 pos, -1 for the unsupervised reviews)
+        df = pl.concat([pl.read_parquet(path) for path in files])
+        return [
+            {"text": text.strip().replace("\n", " "), "label": label}
+            for text, label in zip(df["text"], df["label"])
+        ]
 
     def __len__(self) -> int:
         return len(self.examples)
@@ -77,8 +65,7 @@ if __name__ == "__main__":
     cfg = {
         "dataset": {
             "data_dir": "../dataset_imdb/",
-            "url": "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz",
-            "archive_name": "aclImdb_v1.tar.gz",
+            "repo": "stanfordnlp/imdb",
         }
     }
 

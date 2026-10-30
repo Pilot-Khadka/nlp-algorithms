@@ -1,0 +1,48 @@
+# bert pretraining (mlm + nsp) on the imdb reviews, a small bert (4 layers, d256)
+dataset:
+  name: imdb
+  sequence_length: 256 # tokens per sentence pair, including <sos> and 2 <eos>
+  vocab_size: 10000
+  # max_samples: 500
+  data_dir: data/dataset_imdb/
+  train_split: train+unsupervised # + the 50k unlabeled reviews, 75k documents to pretrain on
+  repo: stanfordnlp/imdb
+
+  use_cache: true
+  num_workers: auto
+  pin_memory: true
+  prefetch_factor: 2
+
+tokenizer:
+  name: bpe
+  vocab_size: 10000
+  sample_size: 5000 # reviews to train the bpe on, the pure python trainer is slow on all 25k
+
+model:
+  name: bert
+  d_model: 256
+  num_layers: 4
+  num_heads: 4
+  d_ff: 1024
+  max_len: 256
+  dropout: 0.1
+
+task:
+  name: masked_language_modeling
+  mask_prob: 0.15
+  metrics:
+    - mlm_loss
+    - mlm_accuracy
+    - mlm_perplexity
+    - nsp_accuracy
+
+train:
+  epochs: 150 # 40 epochs on train only was undertrained (loss still dropping at the end)
+  batch_size: 64
+  multi_gpu: true
+  learning_rate: 5e-4
+  weight_decay: 0.01
+  warmup: 1000 # steps
+  grad_clip: 1.0
+  amp: true # bf16, or fp16 + grad scaler on t4
+  checkpoint_dir: checkpoint/imdb/bert

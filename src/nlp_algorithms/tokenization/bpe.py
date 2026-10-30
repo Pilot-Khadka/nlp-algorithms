@@ -1,4 +1,5 @@
 import json
+import time
 import heapq
 from pathlib import Path
 from collections import defaultdict
@@ -19,7 +20,7 @@ class BytePairEncoder:
     def train(self, text: str, verbose: bool = False):
         ids = list(text.encode("utf-8"))
         n = len(ids)
-        print(f"Initial sequence length: {n:,} tokens")
+        print(f"Initial sequence length: {n:,} tokens", flush=True)
 
         tokens: list[int | None] = list(ids)
         prev = list(range(-1, n - 1))
@@ -35,6 +36,7 @@ class BytePairEncoder:
         heapq.heapify(heap)
 
         seq_len = n
+        start = time.perf_counter()
         # outer_bar = tqdm(range(self.num_merges), disable=not verbose, desc="BPE merges")
         for merge_idx in range(self.num_merges):
             while heap:
@@ -48,6 +50,13 @@ class BytePairEncoder:
             if best_count < 2:
                 print("Stopping early: no pairs with frequency >= 2")
                 break
+
+            if merge_idx % 1000 == 0 and merge_idx:
+                print(
+                    f"bpe merge {merge_idx}/{self.num_merges}: pair count {best_count}, "
+                    f"{seq_len:,} tokens, {time.perf_counter() - start:.0f}s",
+                    flush=True,
+                )
 
             new_id = 256 + merge_idx
             self.merges[best_pair] = new_id
@@ -101,8 +110,10 @@ class BytePairEncoder:
             #        f"(freq={best_count}, new_len={seq_len})"
             #    )
 
-        print(f"Final sequence length: {seq_len:,} tokens")
-        print(f"Compression ratio: {len(text.encode('utf-8')) / seq_len:.2f}x")
+        print(f"Final sequence length: {seq_len:,} tokens", flush=True)
+        print(
+            f"Compression ratio: {len(text.encode('utf-8')) / seq_len:.2f}x", flush=True
+        )
         return self
 
     def _update_pair(
@@ -126,16 +137,38 @@ class BytePairEncoder:
         heapq.heappush(heap, (-pair_counts[new], new))
 
     def tokenize(self, text: str):
-        ids = list(text.encode("utf-8"))
-        while len(ids) >= 2:
-            best_pair = min(
-                zip(ids, ids[1:]),
-                key=lambda p: self.merges.get(p, float("inf")),
-            )
-            if best_pair not in self.merges:
-                break
-            ids = self._merge_list(ids, best_pair, self.merges[best_pair])
-        return ids
+        # lowest merge id first, left to right, same result as merging the whole list
+        # once per merge but without a full pass every time (~60x faster on imdb)
+        ids: list[int | None] = list(text.encode("utf-8"))
+        n = len(ids)
+        nxt = list(range(1, n + 1))
+        prev = list(range(-1, n - 1))
+        heap = []
+        for i in range(n - 1):
+            pair = (ids[i], ids[i + 1])
+            if pair in self.merges:
+                heap.append((self.merges[pair], i))
+        heapq.heapify(heap)
+
+        while heap:
+            new_id, i = heapq.heappop(heap)
+            j = nxt[i]
+            # stale entry, one of the two tokens was merged with something else
+            if ids[i] is None or j >= n or self.merges.get((ids[i], ids[j])) != new_id:
+                continue
+            ids[i] = new_id
+            ids[j] = None
+            nxt[i] = nxt[j]
+            if nxt[i] < n:
+                prev[nxt[i]] = i
+
+            p, k = prev[i], nxt[i]
+            if p >= 0 and (ids[p], new_id) in self.merges:
+                heapq.heappush(heap, (self.merges[(ids[p], new_id)], p))
+            if k < n and (new_id, ids[k]) in self.merges:
+                heapq.heappush(heap, (self.merges[(new_id, ids[k])], i))
+
+        return [t for t in ids if t is not None]
 
     @staticmethod
     def _merge_list(ids, pair, new_id):
@@ -226,11 +259,8 @@ if __name__ == "__main__":
         print(f"\nSaving tokenizer to temporary file: {save_path}")
         tokenizer.save(save_path)
 
-        print("Loading tokenizer back...")
         tokenizer2 = BytePairEncoder(vocab_size=512)
         tokenizer2.load(save_path)
-
-        print("Loaded vocab:")
         pretty_vocab(tokenizer2.vocab)
 
         test_strings = [
@@ -239,10 +269,7 @@ if __name__ == "__main__":
             "The quick brown fox jumps over the lazy dog!",
         ]
 
-        print("\n=== Testing encode/decode ===")
         for s in test_strings:
-            print(f"\nInput: {s!r}")
-
             ids = tokenizer2.tokenize(s)
             print("Tokenized IDs:", ids)
 

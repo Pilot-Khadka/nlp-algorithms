@@ -4,7 +4,7 @@ dataset:
   sequence_length: 256
   vocab_size: 10000
   data_dir: data/dataset_imdb/
-  url: "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz"
+  repo: stanfordnlp/imdb
 
   use_cache: true
   num_workers: auto

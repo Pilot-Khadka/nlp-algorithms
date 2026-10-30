@@ -165,6 +165,11 @@ class ModelFactory:
             MODEL_REGISTRY, model_config.name, flags=model_flags
         )
 
+        if task_config.name == "masked_language_modeling":
+            # bert has its own token, position and segment embeddings and heads
+            kwargs = {k: v for k, v in model_config.items() if k != "name"}
+            return model_class(vocab_size=len(dataset_bundle.vocab), **kwargs)
+
         embedding = EmbeddingFactory.create(model_config, dataset_bundle.vocab)
 
         # Variant flags drive class selection in the registry, so they are not
