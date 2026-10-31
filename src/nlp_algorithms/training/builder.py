@@ -1,6 +1,7 @@
 from typing import Any, Union, Optional
 
 import os
+import logging
 import hashlib
 from dataclasses import dataclass
 
@@ -12,6 +13,9 @@ from torch.nn.parallel import DataParallel, DistributedDataParallel
 from torch.optim.lr_scheduler import _LRScheduler, ReduceLROnPlateau
 
 from nlp_algorithms.infra.preprocessor import PreprocessedDataset
+from nlp_algorithms.infra.collator.masked_language_modeling import (
+    MaskedSentencePairDataset,
+)
 from nlp_algorithms.engine.registry import (
     TASK_REGISTRY,
     COLLATOR_REGISTRY,
@@ -21,6 +25,8 @@ from nlp_algorithms.engine.model_factory import ModelFactory
 from nlp_algorithms.engine.optimizer import get_optimizer
 from nlp_algorithms.engine.dataset_builder import DatasetBundleBuilder
 from nlp_algorithms.util.general_util import get_num_workers
+
+logger = logging.getLogger(__name__)
 
 ModelLike = Union[torch.nn.Module, DataParallel, DistributedDataParallel]
 SchedulerLike = Optional[Union[_LRScheduler, ReduceLROnPlateau]]
@@ -57,6 +63,8 @@ def get_dataset_filename(config, vocab, extra=""):
             vocab_hash,
             extra,
         ]
+        # only when set, so the existing cache names stay the same
+        + ([dataset.train_split] if dataset.get("train_split") else [])
     )
     hash_str = hashlib.md5(key.encode()).hexdigest()[:8]  # 8-char hash
     return f"data/preprocessed/{config.task.name}_{hash_str}.pt"
@@ -113,9 +121,13 @@ class TrainerBuilder:
         )
 
         model.to(self.device)
+        num_params = sum(p.numel() for p in model.parameters())
+        logger.info(
+            f"model {self.config.model.name}: {num_params / 1e6:.2f}M params on {self.device}"
+        )
 
         if self.config.get("train", {}).get("compile_model", False):
-            print(f"Compiling model on GPU {self.gpu_id}...")
+            logger.info("compiling the model with torch.compile")
             model = torch.compile(model)
 
         if self.use_ddp:
@@ -174,9 +186,9 @@ class TrainerBuilder:
         )
 
         if self.use_ddp:
-            print("Warning: DDP is not supported with language modeling iterators.")
-            print(
-                "Consider implementing custom distributed logic for language modeling."
+            logger.warning(
+                "ddp is not supported by the language modeling iterator, "
+                "every rank trains on the full data"
             )
 
         return train_iterator, test_iterator
@@ -195,8 +207,9 @@ class TrainerBuilder:
 
         if os.path.exists(train_name):
             processed_train = PreprocessedDataset.load(train_name)
-            print(f"Loaded preprocessed train dataset from {train_name}")
+            logger.info(f"train cache {train_name}: {len(processed_train)} examples")
         else:
+            logger.info(f"train: preprocessing {len(data_bundle.train)} examples")
             processed_train = PreprocessedDataset(
                 data_bundle.train,
                 src_tokenizer=data_bundle.src_tokenizer,
@@ -204,13 +217,15 @@ class TrainerBuilder:
                 vocab=data_bundle.vocab,
                 max_len=self.config.dataset.sequence_length,
                 task=self.config.task.name,
+                num_workers=os.cpu_count() or 1,
             )
             processed_train.save(train_name)
 
         if os.path.exists(test_name):
             processed_test = PreprocessedDataset.load(test_name)
-            print(f"Loaded preprocessed test dataset from {test_name}")
+            logger.info(f"test cache {test_name}: {len(processed_test)} examples")
         else:
+            logger.info(f"test: preprocessing {len(data_bundle.test)} examples")
             processed_test = PreprocessedDataset(
                 data_bundle.test,
                 src_tokenizer=data_bundle.src_tokenizer,
@@ -218,18 +233,43 @@ class TrainerBuilder:
                 vocab=data_bundle.vocab,
                 max_len=self.config.dataset.sequence_length,
                 task=self.config.task.name,
+                num_workers=os.cpu_count() or 1,
             )
             processed_test.save(test_name)
+
+        if self.config.task.name == "masked_language_modeling":
+            # sentence pairs and masks are sampled per item, fixed for the test set
+            pair_kwargs = {
+                "vocab": data_bundle.vocab,
+                "max_len": self.config.dataset.sequence_length,
+                "mask_prob": self.config.task.get("mask_prob", 0.15),
+            }
+            processed_train = MaskedSentencePairDataset(processed_train, **pair_kwargs)
+            processed_test = MaskedSentencePairDataset(
+                processed_test, fixed=True, **pair_kwargs
+            )
 
         collator = get_from_registry(COLLATOR_REGISTRY, self.config.task.name)(
             vocab=data_bundle.vocab,
             architecture=self.config.model.name,
         )
 
+        world_size = torch.cuda.device_count() if self.use_ddp else 1
         num_workers = self.config.dataset.get("num_workers", "auto")
-        num_workers = get_num_workers(num_workers=num_workers)
-        pin_memory = self.config.dataset.get("pin_memory", True)
-        prefetch_factor = self.config.dataset.get("prefetch_factor", 2)
+        num_workers = get_num_workers(num_workers=num_workers, world_size=world_size)
+        loader_kwargs = {
+            "batch_size": self.config.train.batch_size,
+            "collate_fn": collator.collate,
+            "num_workers": num_workers,
+            "pin_memory": self.config.dataset.get("pin_memory", True),
+        }
+        if num_workers > 0:
+            # prefetch_factor is only allowed with workers, persistent workers are not
+            # started again (and the dataset pickled again) every epoch
+            loader_kwargs["prefetch_factor"] = self.config.dataset.get(
+                "prefetch_factor", 2
+            )
+            loader_kwargs["persistent_workers"] = True
 
         if self.use_ddp:
             train_sampler = DistributedSampler(
@@ -242,44 +282,14 @@ class TrainerBuilder:
             )
 
             train_loader = DataLoader(
-                processed_train,
-                batch_size=self.config.train.batch_size,
-                sampler=train_sampler,
-                collate_fn=collator.collate,
-                num_workers=num_workers,
-                pin_memory=pin_memory,
-                prefetch_factor=prefetch_factor,
+                processed_train, sampler=train_sampler, **loader_kwargs
             )
-
             test_loader = DataLoader(
-                processed_test,
-                batch_size=self.config.train.batch_size,
-                sampler=test_sampler,
-                collate_fn=collator.collate,
-                num_workers=num_workers,
-                pin_memory=pin_memory,
-                prefetch_factor=prefetch_factor,
+                processed_test, sampler=test_sampler, **loader_kwargs
             )
         else:
-            train_loader = DataLoader(
-                processed_train,
-                batch_size=self.config.train.batch_size,
-                shuffle=True,
-                collate_fn=collator.collate,
-                num_workers=num_workers,
-                pin_memory=pin_memory,
-                prefetch_factor=prefetch_factor,
-            )
-
-            test_loader = DataLoader(
-                processed_test,
-                batch_size=self.config.train.batch_size,
-                shuffle=False,
-                collate_fn=collator.collate,
-                num_workers=num_workers,
-                pin_memory=pin_memory,
-                prefetch_factor=prefetch_factor,
-            )
+            train_loader = DataLoader(processed_train, shuffle=True, **loader_kwargs)
+            test_loader = DataLoader(processed_test, shuffle=False, **loader_kwargs)
 
         return train_loader, test_loader
 

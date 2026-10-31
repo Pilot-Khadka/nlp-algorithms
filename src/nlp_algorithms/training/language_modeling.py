@@ -87,58 +87,66 @@ class LanguageModelingTask(BaseTrainer):
                     ncols=120,
                 )
             else:
-                print(f"Training epoch {epoch + 1}/{total_epochs}...")
                 train_progress = self.train_loader
         else:
             train_progress = self.train_loader
 
-        total_loss_sum = 0.0
+        # summed on the gpu, .item() every step would wait for the gpu each time
+        total_loss_sum = torch.zeros((), dtype=torch.float64, device=self.device)
         total_tokens = 0
-        for inputs, targets in train_progress:
+        num_steps = len(self.train_loader)
+        for step, (inputs, targets) in enumerate(train_progress, start=1):
             # For PTB iterator: x, y are (seq_len, batch_size) by default
             # For DataLoader: x, y are (batch_size, seq_len)
-            inputs, targets = inputs.to(self.device), targets.to(self.device)
+            inputs = inputs.to(self.device, non_blocking=True)
+            targets = targets.to(self.device, non_blocking=True)
 
             hidden = self._detach(hidden)
 
             self.optimizer.zero_grad()
 
-            outputs = self.model(
-                inputs,
-                **self._prepare_forward_kwargs(accepts_hidden, hidden),
-            )
-
-            logits, hidden = self._unpack_outputs(outputs)
-            # CE mean reduced
-            loss = self.criterion(
-                logits.view(-1, logits.size(-1)),
-                targets.view(-1),
-            )
-            loss.backward()
-
-            if self.grad_clip:
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(), max_norm=self.grad_clip
+            with self.autocast():
+                outputs = self.model(
+                    inputs,
+                    **self._prepare_forward_kwargs(accepts_hidden, hidden),
                 )
 
-            self.optimizer.step()
+                logits, hidden = self._unpack_outputs(outputs)
+                # CE mean reduced
+                loss = self.criterion(
+                    logits.view(-1, logits.size(-1)),
+                    targets.view(-1),
+                )
+            self.backward_step(loss)
 
             batch_tokens = targets.numel()
             # convert mean loss into token weighted sum
-            loss_value = loss.item()
-            total_loss_sum += loss_value * batch_tokens
+            total_loss_sum += loss.detach().double() * batch_tokens
             total_tokens += batch_tokens
+
+            if self.should_log_step(step, num_steps):
+                avg_loss = total_loss_sum.item() / total_tokens
+                self.log_step(
+                    epoch,
+                    step,
+                    num_steps,
+                    start_time,
+                    {"loss": avg_loss, "ppl": perplexity(loss=avg_loss)},
+                )
 
             if (
                 self.is_main
                 and self.config.show_progress
                 and hasattr(train_progress, "set_postfix")
+                and step % (self.log_every or 50) == 0
             ):
+                avg_loss = total_loss_sum.item() / total_tokens
                 short_metrics = self._tqdm_format_metrics(
-                    {"Val loss": loss_value, "ppl": perplexity(loss=loss)}
+                    {"loss": avg_loss, "ppl": perplexity(loss=avg_loss)}
                 )
                 cast(tqdm, train_progress).set_postfix_str(short_metrics)
 
+        total_loss_sum = total_loss_sum.item()
         if self.use_ddp:
             t = torch.tensor([total_loss_sum, total_tokens], device=self.device)
             dist.all_reduce(t, op=dist.ReduceOp.SUM)
@@ -165,52 +173,40 @@ class LanguageModelingTask(BaseTrainer):
                     leave=False,
                 )
             else:
-                print(f"Evaluating epoch {epoch + 1}/{total_epochs}...")
                 valid_progress = self.test_loader
         else:
             valid_progress = self.test_loader
 
-        total_loss_sum = 0.0
+        total_loss_sum = torch.zeros((), dtype=torch.float64, device=self.device)
         total_tokens = 0
-        all_logits = []
-        all_targets = []
+        # checked once after the loop, a check per batch waits for the gpu every time
+        non_finite = torch.zeros((), dtype=torch.bool, device=self.device)
 
         with torch.no_grad():
             for inputs, targets in valid_progress:
-                inputs, targets = inputs.to(self.device), targets.to(self.device)
+                inputs = inputs.to(self.device, non_blocking=True)
+                targets = targets.to(self.device, non_blocking=True)
                 hidden = self._detach(hidden)
 
-                outputs = self.model(
-                    inputs, **self._prepare_forward_kwargs(accepts_hidden, hidden)
-                )
-                logits, hidden = self._unpack_outputs(outputs)
-
-                if torch.isnan(logits).any() or torch.isinf(logits).any():
-                    raise ValueError(
-                        "Model produced NaN or Inf logits during evaluation"
+                with self.autocast():
+                    outputs = self.model(
+                        inputs, **self._prepare_forward_kwargs(accepts_hidden, hidden)
                     )
+                logits, hidden = self._unpack_outputs(outputs)
+                logits = logits.float()
+                non_finite |= ~torch.isfinite(logits).all()
 
                 loss = self.criterion(
                     logits.view(-1, logits.size(-1)), targets.view(-1)
                 )
-                loss_value = loss.item()
                 batch_tokens = targets.numel()
 
-                total_loss_sum += loss_value * batch_tokens
+                total_loss_sum += loss.detach().double() * batch_tokens
                 total_tokens += batch_tokens
 
-                if (
-                    self.is_main
-                    and self.config.show_progress
-                    and hasattr(valid_progress, "set_postfix")
-                ):
-                    avg_loss = total_loss_sum / total_tokens
-                    cast(tqdm, valid_progress).set_postfix(
-                        {
-                            "Val Loss": f"{loss_value:.4f}",
-                            "PPL": f"{torch.exp(torch.tensor(avg_loss)).item():.2f}",
-                        }
-                    )
+        if non_finite.item():
+            raise ValueError("Model produced NaN or Inf logits during evaluation")
+        total_loss_sum = total_loss_sum.item()
 
         if self.use_ddp:
             t = torch.tensor([total_loss_sum, float(total_tokens)], device=self.device)

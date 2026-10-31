@@ -25,7 +25,14 @@ class ClassificationCollator(BaseCollator):
         encoded = [item["input_ids"] for item in batch]
         labels = [item["label"] for item in batch]
 
-        if self.architecture == "transformer":
+        if self.architecture == "bert":
+            # <sos> = [CLS] for the classifier, <eos> = [SEP] as in pretraining
+            # (sequence_length is 2 less than the model max_len for these)
+            sos = torch.tensor([self.vocab.sos_id])
+            eos = torch.tensor([self.vocab.eos_id])
+            encoded = [torch.cat([sos, _to_long_tensor(x), eos]) for x in encoded]
+            return self._collate_transformer(encoded, labels)
+        elif self.architecture == "transformer":
             return self._collate_transformer(encoded, labels)
         else:
             return self._collate_rnn(encoded, labels)
@@ -79,7 +86,7 @@ if __name__ == "__main__":
         "dataset": {
             "name": "imdb",
             "data_dir": "../../dataset/dataset_imdb/",
-            "url": "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz",
+            "repo": "stanfordnlp/imdb",
         }
     }
 

@@ -15,16 +15,7 @@ from nlp_algorithms.engine.registry import register_trainer
 class MaskedLanguageModelingTrainer(BaseTrainer):
     def __init__(self, config, builder, gpu_id: int = 0, use_ddp: bool = False):
         super().__init__(config, builder, gpu_id=gpu_id, use_ddp=use_ddp)
-        # bert schedule: linear warmup then linear decay to 0, stepped every batch
-        warmup = config.train.get("warmup", 0)
-        total = max(1, config.train.epochs * len(self.train_loader))
-
-        def lr_lambda(step):
-            if step < warmup:
-                return (step + 1) / warmup
-            return max(0.0, (total - step) / max(1, total - warmup))
-
-        self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
+        self.lr_scheduler = self.warmup_linear_decay()
 
     def _forward(self, batch):
         mlm_logits, nsp_logits = self.model(

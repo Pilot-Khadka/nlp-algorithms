@@ -1,8 +1,12 @@
 from typing import Optional, Tuple, Iterator
 
+import logging
+
 import torch
 
 from nlp_algorithms.engine.registry import register_collator
+
+logger = logging.getLogger(__name__)
 
 
 @register_collator("language_modeling")
@@ -46,10 +50,9 @@ class CorpusLanguageModelingDataset:
         encoded = self.vocab.encode(tokens)
         data = torch.tensor(encoded, dtype=torch.long)
 
-        print(f"Total tokens in corpus: {len(data)}")
-
         self.data = self._batchify(data, self.batch_size)
-        print(f"Batchified shape: {self.data.shape}")  # (num_steps, batch_size)
+        # (num_steps, batch_size)
+        logger.info(f"corpus: {len(data)} tokens, batchified {tuple(self.data.shape)}")
 
         self.n_steps = self.data.size(0)
         self.n_batches = (self.n_steps - 1) // self.seq_len

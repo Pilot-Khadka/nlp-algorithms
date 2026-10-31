@@ -117,6 +117,10 @@ def load_multi30k(src_lang="de", tgt_lang="en"):
     if data_path.exists():
         dataset = load_from_disk(str(data_path))
     else:
+        print(
+            f"multi30k: downloading bentrevett/multi30k, saving to {data_path}",
+            flush=True,
+        )
         dataset = load_dataset("bentrevett/multi30k")
         dataset = dataset.map(
             lambda row: {"src": row[src_lang], "tgt": row[tgt_lang]},
@@ -193,7 +197,7 @@ def _normalize_ne_en(train, val, test):
         [normalize_ne(s) for s in train["src"]],
         [normalize_en(t) for t in train["tgt"]],
     )
-    print(f"ne_en train: {len(train)} -> {len(src)} pairs after cleaning")
+    print(f"ne_en train: {len(train)} -> {len(src)} pairs after cleaning", flush=True)
     train = HFDataset.from_dict({"src": src, "tgt": tgt})
     # the test references stay as they are for bleu
     val = HFDataset.from_dict(
@@ -216,6 +220,11 @@ def load_ne_en(src_lang_col="ne", tgt_lang_col="en", normalize=True):
         splits = dataset["train"], dataset["validation"], dataset["test"]
         return _normalize_ne_en(*splits) if normalize else splits
 
+    print(
+        "ne_en: downloading sharad461/ne-en-parallel-208k and flores_plus, "
+        f"saving to {data_path}",
+        flush=True,
+    )
     train_raw = load_dataset("sharad461/ne-en-parallel-208k", split="train")
     train_data = train_raw.map(
         lambda row: {"src": row[src_lang_col], "tgt": row[tgt_lang_col]},
@@ -286,9 +295,7 @@ def load_vocab(load_fn, vocab_path, vocab_size=BPE_VOCAB_SIZE, **kwargs):
         torch.save((vocab_src, vocab_tgt), vocab_path)
     else:
         vocab_src, vocab_tgt = torch.load(vocab_path, weights_only=False)
-    print("Finished.\nVocabulary sizes:")
-    print(len(vocab_src))
-    print(len(vocab_tgt))
+    print(f"vocab {vocab_path}: src {len(vocab_src)}, tgt {len(vocab_tgt)}", flush=True)
     return vocab_src, vocab_tgt
 
 

@@ -1,3 +1,5 @@
+import logging
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,6 +10,9 @@ from nlp_algorithms.engine.registry import (
     TASK_REGISTRY,
 )
 from nlp_algorithms.engine.embedding_factory import EmbeddingFactory
+from nlp_algorithms.encoder_only.bert import BERTClassifier
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingDropout(nn.Module):
@@ -169,6 +174,20 @@ class ModelFactory:
             # bert has its own token, position and segment embeddings and heads
             kwargs = {k: v for k, v in model_config.items() if k != "name"}
             return model_class(vocab_size=len(dataset_bundle.vocab), **kwargs)
+
+        if task_config.name == "classification" and model_config.name == "bert":
+            kwargs = {
+                k: v for k, v in model_config.items() if k not in {"name", "pretrained"}
+            }
+            bert = model_class(vocab_size=len(dataset_bundle.vocab), **kwargs)
+            pretrained = model_config.get("pretrained")
+            if pretrained:
+                # the mlm + nsp checkpoint, the vocab has to be the pretraining one
+                bert.load_state_dict(torch.load(pretrained, map_location="cpu"))
+                logger.info(f"bert: loaded pretrained weights from {pretrained}")
+            return BERTClassifier(
+                bert, data_config.num_class, dropout=model_config.get("dropout", 0.1)
+            )
 
         embedding = EmbeddingFactory.create(model_config, dataset_bundle.vocab)
 

@@ -1,9 +1,12 @@
 from typing import Dict
 
 import os
+import logging
 from torch.utils.data import Dataset
 
 from nlp_algorithms.engine.registry import register_reader
+
+logger = logging.getLogger(__name__)
 
 
 @register_reader("ptb")
@@ -51,7 +54,7 @@ class PTBDataset(Dataset):
             # replace newlines with <eos> and split into tokens
             text = f.read().replace("\n", " <eos> ")
 
-        print(f"Loaded {len(text)} characters from {self.split} split")
+        logger.info(f"ptb {self.split}: {len(text):,} characters from {file_path}")
         return text
 
     def __len__(self) -> int:

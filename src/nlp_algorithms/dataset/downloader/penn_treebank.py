@@ -1,4 +1,5 @@
 import os
+import logging
 import threading
 
 import torch.distributed as dist
@@ -8,6 +9,8 @@ from nlp_algorithms.util.data import download_file
 from nlp_algorithms.util.multi_gpu import is_rank0
 
 from nlp_algorithms.engine.registry import register_downloader
+
+logger = logging.getLogger(__name__)
 
 
 @register_downloader("ptb")
@@ -39,8 +42,6 @@ class PTBDownloader:
                         if "url" in key:
                             filename = value.split("/")[-1]
                             dest_path = os.path.join(data_dir, filename)
-
-                            print(f"Downloading {key} to {dest_path}...")
                             download_file(url=value, filepath=dest_path)
 
                     with open(prepared_flag, "w") as f:

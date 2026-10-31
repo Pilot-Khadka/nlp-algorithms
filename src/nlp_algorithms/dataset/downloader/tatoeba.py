@@ -1,18 +1,22 @@
 from typing import Any, Dict
 
 import os
+import time
 import gzip
+import logging
 import shutil
 import tarfile
 import threading
-from tqdm import tqdm
 from filelock import FileLock
 
 import torch.distributed as dist
 
 from nlp_algorithms.util.data import download_file
+from nlp_algorithms.util.logger import fmt_time
 from nlp_algorithms.util.multi_gpu import is_rank0
 from nlp_algorithms.engine.registry import register_downloader
+
+logger = logging.getLogger(__name__)
 
 
 @register_downloader("tatoeba")
@@ -42,16 +46,12 @@ class TatoebaDownloader:
                     return data_dir
 
                 if is_rank0():
-                    print(f"[Rank 0] Downloading & preparing dataset at {data_dir}...")
-
                     try:
                         cls._download_and_extract_internal(dataset_url, data_dir)
                         cls._validate_required_files(data_dir)
 
                         with open(prepared_flag, "w") as f:
                             f.write("ok")
-
-                        print("Dataset successfully prepared.")
 
                     except Exception as e:
                         # remove flag if incomplete
@@ -78,20 +78,25 @@ class TatoebaDownloader:
 
         try:
             if not os.path.exists(archive_path):
-                print("Downloading Tatoeba dataset...")
                 download_file(dataset_url, temp_archive)
                 os.rename(temp_archive, archive_path)
 
-            print("Extracting...")
+            # the .gz files inside are decompressed too, a few minutes for large pairs
+            logger.info(f"extracting {archive_path} to {data_dir}")
+            start = time.perf_counter()
             os.makedirs(temp_extract_dir, exist_ok=True)
             with tarfile.open(archive_path, "r:*") as tar:
                 tar.extractall(path=temp_extract_dir)
 
             TatoebaDownloader._flatten_extracted_files(temp_extract_dir, data_dir)
             shutil.rmtree(temp_extract_dir, ignore_errors=True)
+            logger.info(
+                f"extracted {sorted(os.listdir(data_dir))} in "
+                f"{fmt_time(time.perf_counter() - start)}"
+            )
 
         except Exception as e:
-            print(f"Extraction failed: {e}")
+            logger.error(f"extraction of {archive_path} failed: {e}")
             if os.path.exists(temp_archive):
                 os.remove(temp_archive)
             if os.path.exists(temp_extract_dir):
@@ -103,7 +108,7 @@ class TatoebaDownloader:
         os.makedirs(dst_root, exist_ok=True)
 
         for root, _, files in os.walk(src_root):
-            for file in tqdm(files, desc=f"Processing files in {root}"):
+            for file in files:
                 src_path = os.path.join(root, file)
 
                 if os.path.abspath(root) == os.path.abspath(dst_root):

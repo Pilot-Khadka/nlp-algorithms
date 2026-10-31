@@ -1,9 +1,12 @@
 import os
+import time
+import logging
+
 import torch
 import torch.multiprocessing as mp
 import torch.distributed as dist
 
-from nlp_algorithms.util.logger import setup_logging
+from nlp_algorithms.util.logger import setup_logging, fmt_time
 from nlp_algorithms.training.builder import TrainerBuilder
 from nlp_algorithms.engine.registry import (
     DOWNLOADER_REGISTRY,
@@ -34,22 +37,17 @@ def train_worker(rank: int, world_size: int, config):
     """
     ddp_setup(rank, world_size)
 
-    logger = setup_logging() if rank == 0 else None
+    # rank 0 logs, the other ranks only warnings and errors
+    logger = setup_logging()
+    if rank != 0:
+        logger.setLevel(logging.WARNING)
 
     try:
-        if rank == 0 and logger:
-            logger.info(f"Starting distributed training on {world_size} GPUs")
-            logger.info(f"Worker {rank}: Building pipeline...")
-
         pipeline = TrainerBuilder(
             config=config,
             gpu_id=rank,
             use_ddp=True,
         ).build()
-
-        if rank == 0 and logger:
-            logger.info(f"Pipeline built successfully on rank {rank}")
-            logger.info(f"Task metrics: {pipeline.metric_names}")
 
         trainer_class = get_from_registry(TRAINER_REGISTRY, config.task.name)
 
@@ -74,20 +72,11 @@ def train_single_gpu(config, gpu_id: int = 0):
         config: Training configuration
         gpu_id: GPU device ID to use
     """
-    logger = setup_logging()
-    device = torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Using device: {device}")
-
-    logger.info("Building training pipeline...")
     pipeline = TrainerBuilder(
         config=config,
         gpu_id=gpu_id,
         use_ddp=False,
     ).build()
-
-    logger.info("Pipeline built successfully")
-    logger.info(f"Model: {type(pipeline.model).__name__}")
-    logger.info(f"Task metrics: {pipeline.metric_names}")
 
     trainer_class = get_from_registry(TRAINER_REGISTRY, config.task.name)
 
@@ -102,14 +91,19 @@ def train_single_gpu(config, gpu_id: int = 0):
 
 
 def prepare_datasets_before_spawn(config):
-    print("=" * 60)
-    print("Preparing datasets in main process before spawning workers...")
+    logger = setup_logging()
+    start = time.perf_counter()
 
     dataset_class = get_from_registry(DOWNLOADER_REGISTRY, config.dataset.name)
     dataset_class().download_and_prepare(config)
 
-    print("Datasets ready!")
-    print("=" * 60)
+    # train the tokenizer and write the preprocessed cache once, otherwise every
+    # worker does it at the same time
+    builder = TrainerBuilder(config=config, use_ddp=False)
+    if not builder._is_language_modeling_task():
+        builder.build_standard_dataloaders(builder._build_datasets())
+
+    logger.info(f"data prep done in {fmt_time(time.perf_counter() - start)}")
 
 
 def run_training(config):
@@ -126,6 +120,7 @@ def run_training(config):
 
         return run_machine_translation(config)
 
+    logger = setup_logging()
     multi_gpu = config.train.get("multi_gpu", False)
     gpu_id = config.get("gpu_id", 0)
 
@@ -133,11 +128,8 @@ def run_training(config):
         world_size = torch.cuda.device_count()
 
         if world_size > 1:
-            print(f"Multi-GPU training enabled: {world_size} GPUs detected")
-
+            logger.info(f"ddp on {world_size} gpus")
             prepare_datasets_before_spawn(config)
-
-            print(f"Spawning {world_size} training workers...")
             mp.spawn(
                 train_worker,
                 args=(world_size, config),
@@ -145,14 +137,9 @@ def run_training(config):
                 join=True,
             )
         else:
-            print("Multi-GPU requested but only 1 GPU available")
-            print("Falling back to single-GPU training")
+            logger.warning("multi_gpu is set but there is only 1 gpu")
             train_single_gpu(config, gpu_id)
     else:
         if multi_gpu:
-            print("Multi-GPU training requested but CUDA not available")
-            print("Running in CPU mode")
-        else:
-            print("Single-GPU/CPU mode")
-
+            logger.warning("multi_gpu is set but cuda is not available, training on cpu")
         train_single_gpu(config, gpu_id)

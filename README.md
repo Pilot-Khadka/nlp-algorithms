@@ -8,7 +8,7 @@ This repo implements classic and modern nlp algorithms. This project is ongoing 
 - [x] RNN-family architectures
 - [x] Transformer models
   - [x] Sequence-to-Sequence
-  - [ ] Encoder only
+  - [x] Encoder only (BERT)
   - [ ] Decoder only
 - [x] NLP tasks
   - [x] Classification
@@ -24,10 +24,9 @@ This repo implements classic and modern nlp algorithms. This project is ongoing 
 | LSTM / Bi-LSTM              | Implemented   |
 | AWD-LSTM                    | Implemented   |
 | Transformer Attention       | Implemented   |
-| Transformer Encoder only model         | Planned   |
+| Transformer Encoder only model (BERT) | Implemented   |
 | Transformer Encoder-Decoder | Implemented   |
 | Transformer Decoder-only model    | Planned       |
-| Hybrid Architectures        | Planned  |
 
 ## datasets
 
@@ -58,6 +57,28 @@ Comparison between custom model implementation and PyTorch equivalents
 
 - **PyTorch implementations are ~8-10x faster** due to optimized CUDA kernels and fused operations.
 - RNN / BiRNN models for both custom and pytorch were excluded since they converged to ~50% accuracy (random).
+
+### bert (imdb dataset)
+
+Pretraining (masked language modeling + next sentence prediction) on the imdb reviews, then fine-tuning on imdb sentiment classification.
+
+| Stage       | Config                                                                                           | Data                                   | MLM Loss | MLM Accuracy | MLM Perplexity | NSP Accuracy | Train Time |
+| ----------- | ------------------------------------------------------------------------------------------------ | -------------------------------------- | -------- | ------------ | -------------- | ------------ | ---------- |
+| Pretraining | 4 layers, d=256, FF=1024, 4 heads, 5.85M params, byte-level BPE 10k, SeqLen=256, BS=128, 150 epochs | imdb train + unsupervised (75k reviews) | 2.94     | 0.446        | 18.9           | 0.891        | 2h36m (2x T4) |
+
+| Model                  | Implementation                                                                                     | Config (Key Hyperparams)                                          | Pretraining Data                          | Test Accuracy |
+| ---------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------- | ------------- |
+| **BERT-Large**         | [reported score from Yang et al. 2019 (XLNet), Table 4](https://arxiv.org/abs/1906.08237)          | 24 layers, d=1024, 340M params                                    | BooksCorpus + Wikipedia                   | 95.49         |
+| **BERT-Base**          | [reported score from Sun et al. 2019, Table 5](https://arxiv.org/abs/1905.05583)                   | 12 layers, d=768, 110M params, SeqLen=512 (head+tail), lr 2e-5    | BooksCorpus + Wikipedia                   | 94.60         |
+| **BERT-Base**          | [reported score from Sun et al. 2019, Table 5](https://arxiv.org/abs/1905.05583)                   | same, further pretrained on the imdb train set for 100k steps     | BooksCorpus + Wikipedia, then imdb        | **95.63**     |
+| **BERT (small)**       | Custom                                                                                             | 4 layers, d=256, 5.85M params, SeqLen=256 (head only), lr 1e-4, 4 epochs | imdb only (75k reviews)            | **89.65** |
+
+**Notes**
+
+- The reported scores are given as test error rates in the papers (4.51, 5.40 and 4.37), shown here as accuracy.
+- The custom model is ~19x smaller than BERT-Base, sees only the first 254 tokens of a review (imdb reviews average ~300 word pieces) and is pretrained on ~100M characters of movie reviews instead of 3.3B words.
+- There is no imdb validation split. The custom score is the final model after 4 epochs (89.83 at epoch 2, the best epoch picked on the test set). Fine-tuning takes 2.6 min on 2x T4.
+- With the same imdb data the small pretrained BERT beats the best RNN above (BiGRU, 81.62) by 8 points.
 
 ### language modeling (penn treebank)
 
@@ -95,5 +116,5 @@ Comparison between custom model implementation and PyTorch equivalents
 ## roadmap
 - [x] training seq-2-seq model on machine translation
 - [ ] benchmarking against pytorch/official models
-- [ ] add BERT as encoder only model
+- [x] add BERT as encoder only model
 - [ ] add GPT-2 as decoder only model

@@ -7,8 +7,7 @@ if __name__ == "__main__":
     cfg = {
         "dataset": {
             "data_dir": "../../dataset/dataset_imdb/",
-            "url": "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz",
-            "archive_name": "aclImdb_v1.tar.gz",
+            "repo": "stanfordnlp/imdb",
         }
     }
 

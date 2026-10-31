@@ -6,11 +6,12 @@ This can be solved by shuffling the train dataset but need to check for language
 from abc import ABC, abstractmethod
 
 import os
+import time
 
 import torch
 import torch.distributed as dist
 
-from nlp_algorithms.util.logger import setup_logging
+from nlp_algorithms.util.logger import setup_logging, fmt_time
 from nlp_algorithms.util.general_util import resolve_checkpoint_dir, unwrap_model
 
 
@@ -44,6 +45,63 @@ class BaseTrainer(ABC):
         self._avg_val_time = 0.0
         self.checkpoint_dir = resolve_checkpoint_dir(config)
 
+        # train.amp: bf16 where the gpu has it, t4/p100 use fp16 with a grad scaler
+        self.amp_dtype = None
+        if config.train.get("amp", False) and self.device.type == "cuda":
+            if torch.cuda.is_bf16_supported(including_emulation=False):
+                self.amp_dtype = torch.bfloat16
+            else:
+                self.amp_dtype = torch.float16
+        self.scaler = torch.amp.GradScaler(
+            "cuda", enabled=self.amp_dtype == torch.float16
+        )
+        # a log line every log_every train steps when there is no progress bar
+        self.log_every = config.train.get("log_every", None)
+
+        if self.is_main:
+            world_size = dist.get_world_size() if use_ddp else 1
+            amp = {torch.bfloat16: "bf16", torch.float16: "fp16"}.get(
+                self.amp_dtype, "off"
+            )
+            self.logger.info(
+                f"train {config.task.name}: {config.train.epochs} epochs x "
+                f"{len(self.train_loader)} steps, batch {config.train.batch_size} x "
+                f"{world_size} {self.device.type}, amp {amp}, "
+                f"{getattr(self.train_loader, 'num_workers', 0)} loader workers each, "
+                f"checkpoints in {self.checkpoint_dir}"
+            )
+
+    def warmup_linear_decay(self):
+        # bert schedule: linear warmup then linear decay to 0, stepped every batch
+        warmup = self.config.train.get("warmup", 0)
+        total = max(1, self.config.train.epochs * len(self.train_loader))
+
+        def lr_lambda(step):
+            if step < warmup:
+                return (step + 1) / warmup
+            return max(0.0, (total - step) / max(1, total - warmup))
+
+        return torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
+
+    def autocast(self):
+        return torch.autocast(
+            device_type=self.device.type,
+            dtype=self.amp_dtype or torch.bfloat16,
+            enabled=self.amp_dtype is not None,
+        )
+
+    def backward_step(self, loss) -> None:
+        # backward, clip and step, the scaler is a no-op without fp16
+        self.scaler.scale(loss).backward()
+        if self.grad_clip:
+            # clip the real gradients, not the scaled ones
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), max_norm=self.grad_clip
+            )
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+
     def train(self) -> None:
         for epoch in range(self.config.train.epochs):
             avg_train_loss, train_time = self.train_one_epoch(
@@ -61,6 +119,7 @@ class BaseTrainer(ABC):
                 self.scheduler.step(avg_valid_loss)
 
             if self.is_main:
+                is_best = avg_valid_loss < self.best_valid_loss
                 self._log_epoch_results(
                     epoch,
                     avg_train_loss,
@@ -68,8 +127,9 @@ class BaseTrainer(ABC):
                     val_time,
                     avg_valid_loss,
                     avg_metrics,
+                    is_best,
                 )
-                if avg_valid_loss < self.best_valid_loss:
+                if is_best:
                     self.best_valid_loss = avg_valid_loss
                     self.save_model("model_best.pt")
 
@@ -94,6 +154,25 @@ class BaseTrainer(ABC):
             result = result[:42] + "..."
         return result
 
+    def should_log_step(self, step: int, num_steps: int) -> bool:
+        # step counts from 1, the last step is covered by the epoch line
+        if not self.is_main or self.config.show_progress:
+            return False
+        log_every = self.log_every or max(1, num_steps // 10)
+        return step % log_every == 0 and step < num_steps
+
+    def log_step(
+        self, epoch: int, step: int, num_steps: int, start_time: float, values: dict
+    ) -> None:
+        elapsed = time.perf_counter() - start_time
+        values_str = " | ".join(f"{k} {v:.4f}" for k, v in values.items())
+        lr = self.optimizer.param_groups[0]["lr"]
+        self.logger.info(
+            f"epoch {epoch + 1} step {step}/{num_steps} | {values_str} | "
+            f"lr {lr:.2e} | {step / elapsed:.2f} steps/s | "
+            f"epoch eta {fmt_time(elapsed / step * (num_steps - step))}"
+        )
+
     def _log_epoch_results(
         self,
         epoch: int,
@@ -102,15 +181,20 @@ class BaseTrainer(ABC):
         val_time: float,
         valid_loss: float,
         metrics: dict,
+        is_best: bool = False,
     ) -> None:
         metrics_str = ", ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
+        lr = self.optimizer.param_groups[0]["lr"]
+        epochs_left = self.config.train.epochs - epoch - 1
+        eta = epochs_left * (self._avg_train_time + self._avg_val_time)
         self.logger.info(
             f"Epoch {epoch + 1}: "
             f"Train Loss: {train_loss:.4f} | "
             f"Train time: {train_time:.2f}s (avg: {self._avg_train_time:.2f}s) | "
             f"Valid Loss: {valid_loss:.4f} | "
             f"Valid time: {val_time:.2f}s (avg: {self._avg_val_time:.2f}s) | "
-            f"{metrics_str}"
+            f"{metrics_str} | lr {lr:.2e} | eta {fmt_time(eta)}"
+            + (" | best, saved" if is_best else "")
         )
 
     @abstractmethod

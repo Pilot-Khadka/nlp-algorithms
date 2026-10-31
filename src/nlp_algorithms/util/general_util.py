@@ -13,14 +13,15 @@ def load_yaml(path):
         return yaml.safe_load(f)
 
 
-def get_num_workers(num_workers) -> int:
+def get_num_workers(num_workers, world_size=1) -> int:
     import multiprocessing
 
-    if isinstance(num_workers, int) and num_workers > 0:
+    if isinstance(num_workers, int) and num_workers >= 0:
         return num_workers
 
+    # auto: share the cpus between the ranks, one cpu each for the training process
     num_cpus = multiprocessing.cpu_count()
-    return min(8, max(0, num_cpus - 2))
+    return min(8, max(1, num_cpus // world_size - 1))
 
 
 class AttrDict(dict):
@@ -60,7 +61,7 @@ def convert_to_attrdict(obj: Any) -> Any:
 
 def load_config(path: str) -> AttrDict:
     raw_cfg = load_yaml(path)
-    print(yaml.safe_dump(raw_cfg, sort_keys=False, default_flow_style=False))
+    print(yaml.safe_dump(raw_cfg, sort_keys=False, default_flow_style=False), flush=True)
 
     if not isinstance(raw_cfg, dict):
         raise ValueError("Top-level YAML must be a mapping")
@@ -164,6 +165,13 @@ def load_checkpoint(
 
 def resolve_tokenizer_path(config, key):
     """we also need key because there can be two tokenizers for translation"""
+    # tokenizer.path reuses a trained tokenizer, e.g. the one from bert pretraining
+    path = config.tokenizer.get("path")
+    if path:
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"tokenizer.path {path} does not exist")
+        return path
+
     checkpoint_dir = getattr(config, "checkpoint_dir", "./checkpoint")
     os.makedirs(checkpoint_dir, exist_ok=True)
 

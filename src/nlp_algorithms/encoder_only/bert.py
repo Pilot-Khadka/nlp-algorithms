@@ -112,7 +112,7 @@ class BERT(nn.Module):
         if isinstance(module, nn.Linear) and module.bias is not None:
             nn.init.zeros_(module.bias)
 
-    def forward(
+    def encode(
         self,
         input_ids,
         token_type_ids=None,
@@ -148,11 +148,36 @@ class BERT(nn.Module):
         for layer in self.encoder_layers:
             hidden_states = layer(hidden_states, extended_attention_mask)
 
-        sequence_output = self.final_norm(hidden_states)
+        return self.final_norm(hidden_states)
 
+    def forward(
+        self,
+        input_ids,
+        token_type_ids=None,
+        attention_mask=None,
+    ):
+        sequence_output = self.encode(input_ids, token_type_ids, attention_mask)
         mlm_logits = self.mlm_head(sequence_output)
         nsp_logits = self.nsp_head(self.pooler(sequence_output[:, 0]))
         return mlm_logits, nsp_logits
+
+
+class BERTClassifier(nn.Module):
+    def __init__(self, bert, num_classes, dropout=0.1):
+        super().__init__()
+        self.bert = bert
+        # the pretraining heads are not used, unused parameters also break ddp
+        self.bert.mlm_head = None
+        self.bert.nsp_head = None
+        self.dropout = nn.Dropout(dropout)
+        self.classifier = nn.Linear(bert.d_model, num_classes)
+        BERT._init_weights(self.classifier)
+
+    def forward(self, input_ids, attention_mask=None):
+        sequence_output = self.bert.encode(input_ids, attention_mask=attention_mask)
+        # [CLS] output through the pooler pretrained on nsp
+        pooled = self.bert.pooler(sequence_output[:, 0])
+        return self.classifier(self.dropout(pooled))
 
 
 if __name__ == "__main__":

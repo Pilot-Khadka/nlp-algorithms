@@ -1,0 +1,48 @@
+# fine-tune the bert pretrained with bert_imdb.yaml (mlm + nsp) on imdb sentiment
+dataset:
+  name: imdb
+  sequence_length: 254 # + [CLS] and [SEP] = the 256 positions of the pretrained model
+  vocab_size: 10000
+  # max_samples: 500
+  data_dir: data/dataset_imdb/
+  repo: stanfordnlp/imdb
+  num_class: 2
+
+  use_cache: true
+  num_workers: auto
+  pin_memory: true
+  prefetch_factor: 2
+
+tokenizer:
+  name: bpe
+  vocab_size: 10000
+  path: checkpoint/imdb/bert/v8/imdb_masked_language_modeling_bpe.pkl # the pretraining tokenizer
+
+model:
+  name: bert
+  d_model: 256
+  num_layers: 4
+  num_heads: 4
+  d_ff: 1024
+  max_len: 256
+  dropout: 0.1
+  pretrained: checkpoint/imdb/bert/v8/model_final.pt
+
+task:
+  name: classification
+  metrics:
+    - accuracy
+    - f1_score
+    - precision
+    - recall
+
+train:
+  epochs: 4
+  batch_size: 32
+  multi_gpu: true
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  warmup: 150 # steps, ~10% of 4 epochs x 391 steps on 2 gpus
+  grad_clip: 1.0
+  amp: true
+  checkpoint_dir: checkpoint/imdb/bert_classification

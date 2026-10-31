@@ -3,7 +3,10 @@ from typing import List
 
 import os
 import gc
+import time
+import random
 import inspect
+import logging
 from tqdm import tqdm
 from collections import Counter
 
@@ -14,7 +17,10 @@ from nlp_algorithms.engine.registry import (
     TOKENIZER_REGISTRY,
 )
 from nlp_algorithms.infra.vocabulary import Vocabulary
+from nlp_algorithms.util.logger import fmt_time
 from nlp_algorithms.util.general_util import resolve_tokenizer_path
+
+logger = logging.getLogger(__name__)
 
 
 class DatasetBundle:
@@ -47,14 +53,15 @@ def _is_trainable_tokenizer(tokenizer) -> bool:
 
 def _is_trained(tokenizer) -> bool:
     """check if tokenizer has already been trained."""
+    # bpe starts with the 256 byte vocab, it is trained once it has merges
+    if hasattr(tokenizer, "merges"):
+        return bool(tokenizer.merges)
     if hasattr(tokenizer, "vocab") and tokenizer.vocab:
-        return True
-    if hasattr(tokenizer, "merges") and tokenizer.merges:
         return True
     return False
 
 
-def _collect_corpus(dataset, key: str) -> str:
+def _collect_corpus(dataset, key: str, sample_size=None) -> str:
     texts: List[str] = []
 
     try:
@@ -62,7 +69,13 @@ def _collect_corpus(dataset, key: str) -> str:
     except TypeError:
         total = None
 
-    iterator = tqdm(range(len(dataset)), total=total, desc=f"Collecting '{key}' corpus")
+    indices = range(len(dataset))
+    if sample_size is not None and sample_size < len(dataset):
+        # bpe training keeps python objects per byte, a sample of the documents is enough
+        indices = sorted(random.Random(42).sample(indices, sample_size))
+        total = sample_size
+
+    iterator = tqdm(indices, total=total, desc=f"Collecting '{key}' corpus")
 
     for i in iterator:
         item = dataset[i]
@@ -105,21 +118,33 @@ def build_vocab_from_key(
         save_path = resolve_tokenizer_path(config, key)
 
         if os.path.exists(save_path):
-            print(f"Loading saved tokenizer from: {save_path}")
             tokenizer.load(save_path)
+            logger.info(
+                f"tokenizer {config.tokenizer.name}: loaded {save_path} "
+                f"({len(tokenizer.vocab)} tokens)"
+            )
 
         elif not _is_trained(tokenizer):
-            print(f"Training tokenizer on '{key}' corpus...")
-            corpus = _collect_corpus(dataset, key)
-            tokenizer.train(corpus=corpus)
+            start = time.perf_counter()
+            corpus = _collect_corpus(
+                dataset, key, sample_size=config.tokenizer.get("sample_size")
+            )
+            logger.info(
+                f"tokenizer {config.tokenizer.name}: training on '{key}', "
+                f"{len(corpus) / 1e6:.1f}M characters"
+            )
+            tokenizer.train(corpus)
             del corpus
             gc.collect()
 
-            print(f"Saving tokenizer to: {save_path}")
             tokenizer.save(path=save_path)
+            logger.info(
+                f"tokenizer {config.tokenizer.name}: {len(tokenizer.vocab)} tokens in "
+                f"{fmt_time(time.perf_counter() - start)}, saved to {save_path}"
+            )
 
         else:
-            print(f"Using pre-trained tokenizer vocab for '{key}'")
+            logger.info(f"tokenizer {config.tokenizer.name}: already trained")
 
         token_to_id = dict(special_tokens)
         next_id = len(special_tokens)
@@ -186,10 +211,12 @@ class DatasetBundleBuilder:
         data_reader_cls = get_from_registry(DATA_READER_REGISTRY, config.dataset.name)
 
         max_samples = config.dataset.get("max_samples", None)
+        start = time.perf_counter()
+        logger.info(f"data {config.dataset.name}: reading {data_dir}")
 
         train = data_reader_cls(
             data_dir=data_dir,
-            split="train",
+            split=config.dataset.get("train_split", "train"),
             max_samples=max_samples,
         )
 
@@ -211,15 +238,21 @@ class DatasetBundleBuilder:
                 max_samples=max_samples,
             )
 
-        if has_test:
+        if has_test and has_valid:
             test = data_reader_cls(
                 data_dir=data_dir,
                 split="test",
                 max_samples=max_samples,
             )
         else:
-            # fallback to valid (rare but symmetric)
+            # valid already is the test split, or there is no test split
             test = valid
+
+        logger.info(
+            f"data {config.dataset.name}: train {len(train)}, valid {len(valid)}, "
+            f"test {len(test)} ({fmt_time(time.perf_counter() - start)})"
+            + ("" if has_valid else ", no valid split, validating on test")
+        )
 
         tokenizer_cls = get_from_registry(TOKENIZER_REGISTRY, config.tokenizer.name)
 
@@ -240,6 +273,15 @@ class DatasetBundleBuilder:
         src_vocab = None
         tgt_vocab = None
 
+        # bert has <mask> at id 4, fine-tuning needs the same ids as pretraining
+        bert_special_tokens = {
+            "<pad>": 0,
+            "<unk>": 1,
+            "<sos>": 2,  # [CLS]
+            "<eos>": 3,  # [SEP]
+            "<mask>": 4,
+        }
+
         # vocabulary build logic
         if config.task.name in {"classification", "ner"}:
             token_vocab = build_vocab_from_key(
@@ -248,6 +290,9 @@ class DatasetBundleBuilder:
                 key="text",
                 tokenizer=tokenizer,
                 vocab_size=config.dataset.vocab_size,
+                special_tokens=bert_special_tokens
+                if config.model.name == "bert"
+                else None,
             )
         elif config.task.name == "translation":
             src_vocab = build_vocab_from_key(
@@ -265,6 +310,15 @@ class DatasetBundleBuilder:
                 tokenizer=tokenizer_tgt,
                 vocab_size=config.dataset.vocab_size,
             )
+        elif config.task.name == "masked_language_modeling":
+            token_vocab = build_vocab_from_key(
+                train,
+                config=config,
+                key="text",
+                tokenizer=tokenizer,
+                vocab_size=config.dataset.vocab_size,
+                special_tokens=bert_special_tokens,
+            )
         else:
             token_vocab = build_vocab_from_key(
                 train,
@@ -273,6 +327,14 @@ class DatasetBundleBuilder:
                 tokenizer=tokenizer,
                 vocab_size=config.dataset.vocab_size,
             )
+
+        for name, vocab in [
+            ("vocab", token_vocab),
+            ("src vocab", src_vocab),
+            ("tgt vocab", tgt_vocab),
+        ]:
+            if vocab is not None:
+                logger.info(f"{name}: {len(vocab)} tokens")
 
         return DatasetBundle(
             train_dataset=train,

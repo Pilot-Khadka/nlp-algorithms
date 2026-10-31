@@ -1,4 +1,3 @@
-import glob
 from os.path import exists
 
 import torch
@@ -6,22 +5,18 @@ import sacrebleu
 
 
 from nlp_algorithms.encoder_decoder.seq2seq import make_model
-from nlp_algorithms.encoder_decoder.train import greedy_decode, beam_search
+from nlp_algorithms.encoder_decoder.train import greedy_decode
+from nlp_algorithms.encoder_decoder.evaluate import (
+    average_checkpoints,
+    last_checkpoints,
+    translate,
+)
 from nlp_algorithms.encoder_decoder.data import (
     load_vocab,
     load_ne_en,
     Batch,
     create_dataloaders,
-    collate_batch,
 )
-
-
-def average_checkpoints(paths, out_path):
-    # average of the last epochs, usually better than a single checkpoint
-    states = [torch.load(p, map_location="cpu", weights_only=True) for p in paths]
-    avg = {k: sum(s[k].float() for s in states) / len(states) for k in states[0]}
-    torch.save(avg, out_path)
-    return avg
 
 
 def load_trained_model(prefix="checkpoint/ne_en/model_", keep_last=5):
@@ -39,12 +34,12 @@ def load_trained_model(prefix="checkpoint/ne_en/model_", keep_last=5):
     if exists(model_path):
         state = torch.load(model_path, map_location="cpu", weights_only=True)
     else:
-        # train_model keeps the last keep_last epoch checkpoints
-        paths = sorted(glob.glob(f"{prefix}[0-9][0-9].pt"))[-keep_last:]
+        paths = last_checkpoints(prefix, keep_last)
         if not paths:
             raise RuntimeError(f"No checkpoints found at {prefix}*.pt")
         print("Averaging:", paths)
-        state = average_checkpoints(paths, model_path)
+        state = average_checkpoints(paths)
+        torch.save(state, model_path)
 
     model = make_model(
         len(vocab_src),
@@ -104,41 +99,21 @@ def calculate_bleu(
 ):
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    pad_idx = vocab_src["<blank>"]
 
     # flores devtest, the source is normalized by load_ne_en, the references are not
     _, _, test_data = load_ne_en()
     references = list(test_data["tgt"])
-    hypotheses = []
-
     model.to(device).eval()
-    with torch.no_grad():
-        for row in test_data:
-            src, _ = collate_batch(
-                [row],
-                vocab_src,
-                vocab_tgt,
-                device,
-                max_padding=max_padding,
-                pad_id=pad_idx,
-            )
-            src_mask = (src != pad_idx).unsqueeze(-2)
-            if beam_size > 1:
-                model_out = beam_search(
-                    model,
-                    src,
-                    src_mask,
-                    max_padding,
-                    start_symbol=0,
-                    beam_size=beam_size,
-                    len_penalty=len_penalty,
-                )[0]
-            else:
-                model_out = greedy_decode(
-                    model, src, src_mask, max_padding, start_symbol=0
-                )[0]
-            # decode drops <s>, </s> and <blank>
-            hypotheses.append(vocab_tgt.decode(model_out.tolist()).strip())
+    hypotheses = translate(
+        model,
+        test_data,
+        vocab_src,
+        vocab_tgt,
+        max_padding,
+        beam_size=beam_size,
+        len_penalty=len_penalty,
+        device=device,
+    )
 
     result = sacrebleu.corpus_bleu(hypotheses, [references])
     return result

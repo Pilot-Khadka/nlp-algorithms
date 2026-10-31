@@ -13,6 +13,21 @@ from nlp_algorithms.engine.registry import register_trainer
 
 @register_trainer("classification")
 class ClassificationTrainer(BaseTrainer):
+    def __init__(self, config, builder, gpu_id: int = 0, use_ddp: bool = False):
+        super().__init__(config, builder, gpu_id=gpu_id, use_ddp=use_ddp)
+        # bert fine-tuning uses the pretraining schedule, the rnns keep a fixed lr
+        self.lr_scheduler = None
+        if config.model.name == "bert":
+            self.lr_scheduler = self.warmup_linear_decay()
+
+    def _forward(self, batch):
+        if self.config.model.name == "bert":
+            # padding is masked out of the attention
+            return self.model(
+                batch["input_ids"], attention_mask=batch["attention_mask"]
+            )
+        return self.model(batch["input_ids"])
+
     def train_one_epoch(self, epoch, total_epochs) -> tuple[float, float]:
         self.model.train()
         start_time = time.perf_counter()
@@ -33,17 +48,16 @@ class ClassificationTrainer(BaseTrainer):
                     ncols=120,
                 )
             else:
-                print(f"Training epoch {epoch + 1}/{total_epochs}...")
                 train_progress = self.train_loader
         else:
             train_progress = self.train_loader
 
-        total_train_loss = 0.0
-        total_samples = 0
-        correct_predictions = 0
+        # [loss sum, samples, correct], summed on the gpu to avoid a sync every step
+        totals = torch.zeros(3, dtype=torch.float64, device=self.device)
+        num_steps = len(self.train_loader)
 
-        for batch in train_progress:
-            batch = {k: v.to(self.device) for k, v in batch.items()}
+        for step, batch in enumerate(train_progress, start=1):
+            batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
 
             inputs = batch["input_ids"]
             labels = batch["labels"]
@@ -53,48 +67,50 @@ class ClassificationTrainer(BaseTrainer):
             batch_size = inputs.size(0)
 
             self.optimizer.zero_grad()
-            outputs = self.model(inputs)
+            with self.autocast():
+                outputs = self._forward(batch)
 
-            logits = outputs[0] if isinstance(outputs, tuple) else outputs
-            if logits.dim() == 3:
-                logits = logits[:, -1, :]
+                logits = outputs[0] if isinstance(outputs, tuple) else outputs
+                if logits.dim() == 3:
+                    logits = logits[:, -1, :]
 
-            loss = self.criterion(logits, labels)
-            loss.backward()
-
-            if self.grad_clip:
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(), max_norm=self.grad_clip
-                )
-
-            self.optimizer.step()
+                loss = self.criterion(logits, labels)
+            self.backward_step(loss)
+            if self.lr_scheduler is not None:
+                self.lr_scheduler.step()
 
             predictions = torch.argmax(logits, dim=1)
-            correct = (predictions == labels).sum().item()
+            correct = (predictions == labels).sum()
+            totals += torch.stack(
+                [loss.detach() * batch_size, labels.new_tensor(batch_size), correct]
+            ).double()
 
-            total_train_loss += loss.item() * batch_size
-            total_samples += batch_size
-            correct_predictions += correct
+            if self.should_log_step(step, num_steps):
+                loss_sum, samples, correct_sum = totals.tolist()
+                self.log_step(
+                    epoch,
+                    step,
+                    num_steps,
+                    start_time,
+                    {"loss": loss_sum / samples, "acc": correct_sum / samples},
+                )
 
             if (
                 self.is_main
                 and self.config.show_progress
                 and hasattr(train_progress, "set_postfix")
+                and step % (self.log_every or 50) == 0
             ):
-                avg_acc = correct_predictions / total_samples
+                loss_sum, samples, correct_sum = totals.tolist()
                 short_metrics = self._tqdm_format_metrics(
-                    {"Loss": loss.item(), "Acc": avg_acc}
+                    {"Loss": loss_sum / samples, "Acc": correct_sum / samples}
                 )
                 cast(tqdm, train_progress).set_postfix_str(short_metrics)
 
-        avg_train_loss = total_train_loss / total_samples if total_samples > 0 else 0.0
-
         if self.use_ddp:
-            loss_tensor = torch.tensor(
-                [total_train_loss, float(total_samples)], device=self.device
-            )
-            dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
-            avg_train_loss = (loss_tensor[0] / loss_tensor[1]).item()
+            dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+        loss_sum, samples = totals[:2].tolist()
+        avg_train_loss = loss_sum / samples if samples > 0 else 0.0
 
         train_time = time.perf_counter() - start_time
 
@@ -120,55 +136,48 @@ class ClassificationTrainer(BaseTrainer):
                     leave=False,
                 )
             else:
-                print(f"Evaluating epoch {epoch + 1}/{total_epochs}...")
                 valid_progress = self.test_loader
         else:
             valid_progress = self.test_loader
 
         all_predictions = []
         all_targets = []
+        # checked once after the loop, a check per batch waits for the gpu every time
+        non_finite = torch.zeros((), dtype=torch.bool, device=self.device)
+        loss_sum = torch.zeros((), dtype=torch.float64, device=self.device)
 
         with torch.no_grad():
             for batch in valid_progress:
-                batch = {k: v.to(self.device) for k, v in batch.items()}
+                batch = {
+                    k: v.to(self.device, non_blocking=True) for k, v in batch.items()
+                }
 
                 inputs = batch["input_ids"]
                 labels = batch["labels"]
                 batch_size = inputs.size(0)
 
-                outputs = self.model(inputs)
+                with self.autocast():
+                    outputs = self._forward(batch)
                 logits = outputs[0] if isinstance(outputs, tuple) else outputs
 
                 if logits.dim() == 3:
                     logits = logits[:, -1, :]
-
-                if torch.isnan(logits).any() or torch.isinf(logits).any():
-                    raise ValueError(
-                        "Model produced NaN or Inf logits during evaluation"
-                    )
+                logits = logits.float()
+                non_finite |= ~torch.isfinite(logits).all()
 
                 loss = self.criterion(logits, labels)
-                loss_value = loss.item()
-
-                total_valid_loss += loss_value * batch_size
+                loss_sum += loss.detach().double() * batch_size
                 total_samples += batch_size
 
                 preds = torch.argmax(logits, dim=1)
 
                 # all_logits.append(logits.detach().cpu())
-                all_predictions.append(preds.detach().cpu())
-                all_targets.append(labels.detach().cpu())
+                all_predictions.append(preds.detach())
+                all_targets.append(labels.detach())
 
-                if (
-                    self.is_main
-                    and self.config.show_progress
-                    and hasattr(valid_progress, "set_postfix")
-                ):
-                    avg_loss = total_valid_loss / total_samples
-                    short_metrics = self._tqdm_format_metrics(
-                        {"ValLoss": loss_value, "AvgValLoss": avg_loss}
-                    )
-                    cast(tqdm, valid_progress).set_postfix_str(short_metrics)
+        if non_finite.item():
+            raise ValueError("Model produced NaN or Inf logits during evaluation")
+        total_valid_loss = loss_sum.item()
 
         # concatenate per-rank
         # all_logits = torch.cat(all_logits, dim=0)

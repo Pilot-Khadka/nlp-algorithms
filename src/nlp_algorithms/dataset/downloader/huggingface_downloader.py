@@ -1,17 +1,20 @@
 from typing import Any, Dict, List, Union
 
 import os
+import time
 import shutil
+import logging
 import fnmatch
 import threading
-from tqdm import tqdm
 from filelock import FileLock
 
 import torch.distributed as dist
 from huggingface_hub import list_repo_files, hf_hub_download, login, whoami
 
-from nlp_algorithms.util.multi_gpu import is_rank0
+from nlp_algorithms.util.logger import fmt_time
 from nlp_algorithms.engine.registry import register_downloader
+
+logger = logging.getLogger(__name__)
 
 
 @register_downloader("huggingface")
@@ -27,18 +30,15 @@ class HuggingFaceDatasetDownloader:
         token = os.environ.get("HF_TOKEN", None)
 
         if token is None:
-            print(
-                "[WARNING] HF_TOKEN not found in environment. "
-                "If the repo is private, download will fail."
-            )
+            logger.warning("HF_TOKEN is not set, private repos will fail to download")
             return
 
         try:
             login(token=token)
             user = whoami()
-            print(f"[HF Login] Logged in as: {user.get('name')}")
+            logger.info(f"hugging face login as {user.get('name')}")
         except Exception as e:
-            print(f"[ERROR] Failed to login to Hugging Face: {e}")
+            logger.error(f"hugging face login failed: {e}")
             raise
 
         HuggingFaceDatasetDownloader._logged_in = True
@@ -66,24 +66,14 @@ class HuggingFaceDatasetDownloader:
                 if os.path.exists(prepared_flag) and not force:
                     return data_dir
 
-                if is_rank0():
-                    print("[Rank 0] Preparing HF datasets...")
-
                 try:
                     for repo_cfg in repos:
                         repo_id = repo_cfg["id"]
                         patterns = repo_cfg.get("files", "*")
-
-                        if is_rank0():
-                            print(f"[Rank 0] Repo: {repo_id}, patterns={patterns}")
-
                         cls._download_repo(repo_id, data_dir, patterns)
 
                     with open(prepared_flag, "w") as f:
                         f.write("ok")
-
-                    if is_rank0():
-                        print("Dataset successfully prepared.")
 
                 except Exception as e:
                     if os.path.exists(prepared_flag):
@@ -116,19 +106,20 @@ class HuggingFaceDatasetDownloader:
 
     @staticmethod
     def _download_repo(repo_id: str, data_dir: str, patterns):
-        print(f"Listing files in HF repo: {repo_id}")
         all_files = list_repo_files(repo_id, repo_type="dataset")
 
         files_to_download = HuggingFaceDatasetDownloader._filter_files(
             all_files, patterns
         )
 
-        print(
-            f"Matched {len(files_to_download)} / {len(all_files)} files "
-            f"in repo {repo_id} using patterns {patterns}"
+        logger.info(
+            f"{repo_id}: downloading {len(files_to_download)} of {len(all_files)} files "
+            f"(patterns {patterns}) to {data_dir}"
         )
 
-        for filename in tqdm(files_to_download, desc=f"Downloading from {repo_id}"):
+        start = time.perf_counter()
+        size = 0
+        for i, filename in enumerate(files_to_download, 1):
             try:
                 downloaded_path = hf_hub_download(
                     repo_id=repo_id, filename=filename, repo_type="dataset"
@@ -136,9 +127,14 @@ class HuggingFaceDatasetDownloader:
                 dst_path = os.path.join(data_dir, filename)
                 os.makedirs(os.path.dirname(dst_path), exist_ok=True)
                 shutil.copy(downloaded_path, dst_path)
+                size += os.path.getsize(dst_path)
+                logger.info(
+                    f"{repo_id}: {i}/{len(files_to_download)} {filename}, "
+                    f"{size / 1e6:.1f} MB so far, {fmt_time(time.perf_counter() - start)}"
+                )
 
             except Exception as e:
-                print(f"Failed to download {filename}: {e}")
+                logger.error(f"{repo_id}: failed to download {filename}: {e}")
                 raise
 
 

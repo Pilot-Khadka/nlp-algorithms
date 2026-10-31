@@ -1,11 +1,16 @@
 from typing import Optional
 
 import os
+import time
+import logging
+
 import torch
 import numpy as np
-from tqdm import tqdm
 
+from nlp_algorithms.util.logger import fmt_time
 from nlp_algorithms.engine.registry import register_reader
+
+logger = logging.getLogger(__name__)
 
 
 def build_or_load_index(text_file, max_samples=None, desc="Indexing"):
@@ -17,20 +22,23 @@ def build_or_load_index(text_file, max_samples=None, desc="Indexing"):
             data = data[:max_samples]
         return data
 
+    # one pass over the file the first time, the offsets are saved next to it
+    start = time.perf_counter()
     offsets = []
     with open(text_file, "r", encoding="utf-8") as f:
-        pbar = tqdm(desc=desc)
         while True:
             offset = f.tell()
             line = f.readline()
             if not line:
                 break
             offsets.append(offset)
-            pbar.update(1)
 
             if max_samples is not None and len(offsets) >= max_samples:
                 break
-        pbar.close()
+    logger.info(
+        f"{desc}: {len(offsets)} lines in {text_file}, "
+        f"{fmt_time(time.perf_counter() - start)}"
+    )
 
     offsets_np = np.array(offsets, dtype=np.int64)
     np.save(idx_file, offsets_np)
